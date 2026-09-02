@@ -1,0 +1,64 @@
+body {
+  background-color: #f5f6f8;
+}
+
+.navbar-brand {
+  font-weight: 600;
+}
+
+#view .card {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.company-row {
+  cursor: pointer;
+}
+
+.company-row:hover {
+  background-color: #f1f3f5;
+}
+
+.badge-complete {
+  background-color: #e6f4ea;
+  color: #1e7e34;
+}
+
+.badge-incomplete {
+  background-color: #fdf3d7;
+  color: #8a6d1a;
+}
+
+.badge-source-upload {
+  background-color: #e7f0fe;
+  color: #1a56db;
+}
+
+.badge-source-generated {
+  background-color: #f3e8fd;
+  color: #6b21a8;
+}
+
+.stat-muted {
+  color: #6c757d;
+  font-size: 0.85rem;
+}
+
+.muted-label {
+  color: #6c757d;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+dl.profile-dl {
+  margin-bottom: 0;
+}
+
+dl.profile-dl dt {
+  color: #495057;
+}
+
+dl.profile-dl dd {
+  margin-bottom: 0.75rem;
+}
