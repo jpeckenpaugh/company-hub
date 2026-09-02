@@ -1,0 +1,5 @@
+# Targets Python 3.11+ (developed on 3.12). Install via ./install.sh.
+fastapi==0.141.1
+uvicorn==0.52.4
+python-multipart==0.0.32
+fpdf2==2.8.8
