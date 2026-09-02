@@ -34,7 +34,8 @@ def company_is_complete(row) -> bool:
 
 
 def company_to_dict(row, artifacts_count: int = 0) -> dict:
-    data = {f: row[f] for f in ALL_COMPANY_FIELDS}
+    data = {"id": row["id"]}
+    data.update({f: row[f] for f in ALL_COMPANY_FIELDS})
     data["created_at"] = row["created_at"]
     data["updated_at"] = row["updated_at"]
     data["is_complete"] = company_is_complete(row)
