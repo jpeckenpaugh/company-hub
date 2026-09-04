@@ -245,3 +245,240 @@ makes were exercised live via `curl` (see evidence).
   company data (byte size changes after edits).
 - Testing mutated the local `data/`; it was restored to the pristine 6-company
   seeded state (0 artifacts) after verification. `data/` is gitignored.
+
+---
+
+# Sprint 01 — Verification Section
+
+Stage 8 artifact for the Sprint 01 enhancement pass. Evidence-backed pass/fail
+verification of the delivered Sprint 01 application (Stage 6 backend + Stage 7
+frontend) against the approved specifications: `enhancements/scope.md`
+(items a–u), `features/briefs/01-…-09-…`, and `docs/architecture.md` §8
+(API contract).
+
+- **Date:** 2026-09-04
+- **Method:** live API verification via `curl` against the app (throwaway DB,
+  real printed-admin-password login path), the persistent test suites under
+  `tests/` (backend `pytest` + CDP headless-Chrome browser suite, orchestrated
+  by `tests/run.sh`), and static review of frontend rendering logic. Logs and
+  captured responses in `./tmp/verify-sprint01/`.
+- **Environment:** Python 3.12.14 venv (existing, reused); server started via
+  `./run.sh` with `COMPANY_HUB_DB` pointed at a throwaway DB
+  (`tmp/verify-sprint01/verify.db`) so the gitignored dev `data/` remained
+  untouched (verified pristine afterwards). Admin password taken from the
+  console print at startup (the real scope-item-b login path).
+- **Result:** **PASS** — 0 failures. 93 live `curl` checks, 51 backend `pytest`
+  checks, and 34 browser automation checks all pass. See Limitations at the end.
+- **Note on the v0.1 Limitations:** the v0.1 section above (2026-09-02) stated
+  that browser interaction was not exercised by an automation tool. That
+  limitation is **superseded** by the persistent CDP browser suite added to this
+  repo; Sprint 01 frontend behavior was exercised live in headless Chrome. The
+  v0.1 section is preserved unchanged.
+
+## S1. Checklist derivation
+
+Each check is observable and traceable to a specific requirement. Sources:
+scope items (`a`–`u`), feature briefs (`B01`–`B09`), architecture §8 (`§8.x`,
+`S1-…` evidence in `./tmp/verify-sprint01/evidence/`). The checklist was derived
+by this stage from the approved specifications; it was not provided by another
+role.
+
+### S1.1 Environment, seed baseline & auth (scope a/b/c, B01, §8.1.5/§8.2.1)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-ENV-1 | `./run.sh` starts the app; `GET /` serves the SPA shell (200, unauthenticated — the SPA renders the login view) | §8.2 | **PASS** |
+| S1-ENV-2 | `GET /openapi.json` → 200 | §4 | **PASS** |
+| S1-SEED-1 | `data/` pristine before live checks: 6 companies, 6 industries, 83 countries, 6 locations (one HQ each), zero references/news/logos/artifacts | t/u | **PASS** |
+| S1-SEED-2 | Seed = exactly the six real companies (Toyota/Samsung/HSBC/Novartis/Shell/Carrefour), each complete, one HQ each; Shell HQ = London, GB | t, B09, §8.1.5 | **PASS** |
+| S1-AUTH-1 | Every `/api/*` route except `POST /api/auth/login` returns `401 {"detail":"Not authenticated"}` without a session (incl. content endpoints) | a, §8.2 | **PASS** |
+| S1-AUTH-2 | Login with wrong password → `401 {"detail":"Invalid email or password"}` | B01, §8.2.1 | **PASS** |
+| S1-AUTH-3 | Login with the printed startup password → `200 {id,email}` + HttpOnly `session` cookie | b, B01, §8.2.1 | **PASS** |
+| S1-AUTH-4 | `GET /api/auth/me` → 200 with session; 401 without | B01, §8.2.1 | **PASS** |
+| S1-AUTH-5 | Logout → 204, session revoked (next `/api` → 401), idempotent (204 with no session) | B01, §8.2.1 | **PASS** |
+
+### S1.2 Industries & countries (scope d/e/f/i, B02/B03/B04, §8.1.2/§8.2.2)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-IND-1 | `GET /api/industries` → 200, six seeded, sorted by name | e, §8.2.2 | **PASS** |
+| S1-IND-2 | `POST` duplicate (exact and case-variant) → `409 "Industry already exists"`; blank name → 422 | f, §8.2.2 | **PASS** |
+| S1-IND-3 | `POST` new industry → 201 and appears in list | f, §8.2.2 | **PASS** |
+| S1-IND-4 | `PUT` rename → 200; companies using it resolve the new label automatically | f, B03 | **PASS** |
+| S1-IND-5 | Rename to existing name → 409; unknown id → 404; no `DELETE` (405) | f, B03 | **PASS** |
+| S1-CTRY-1 | `GET /api/countries` → 200, sorted by name, 83 entries incl. `GB`/United Kingdom, JP, KR, CH, FR | i, §8.1.2 | **PASS** |
+
+### S1.3 Companies (scope s/t, B02/B05/B09, §8.1.1/§8.1.4/§8.2.3)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-CO-1 | List shape: nested `industry {id,name}`, derived `hq_location`, `logo_url` null, `artifacts_count` 0, `is_complete` true for seeds | §8.2.3 | **PASS** |
+| S1-CO-2 | Derived `hq_location` = "`<city>, <country_code>`": Toyota "Toyota City, JP"; Shell "London, GB" (UK→GB mapping) | §8.2.3, §8.8 n.1 | **PASS** |
+| S1-CO-3 | Profile includes `locations` (id asc, `country_name`), empty `references`/`news`/`artifacts` | §8.2.3 | **PASS** |
+| S1-CO-4 | Country filter: `?countries=GB,FR` → HSBC/Shell/Carrefour; single code narrows; combined with `?q=` (AND) | j, B05, §8.2.3 | **PASS** |
+| S1-CO-5 | Unknown code → `[]`; **present-but-empty `?countries=` → `[]` (active filter)**; absent → full list | B05, §8.8 n.5 | **PASS** |
+| S1-CO-6 | Multi-location company appears once (DISTINCT) under a matching filter | j, B05 | **PASS** |
+| S1-CO-7 | `POST`/`PUT` accept `industry_id`; unknown industry → 422; blank name → 422; full-replace `PUT` → 200 with `is_complete` derived | §8.2.3 | **PASS** |
+| S1-CO-8 | `DELETE` company → 204, then 404; unknown → 404 | §4/§8.2.3 | **PASS** |
+| S1-CO-9 | v0.1 name search (`?q=`) still works | r | **PASS** |
+
+### S1.4 Locations (scope g/h/i, B04, §8.1.2/§8.2.4)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-LOC-1 | Create location → 201 with `country_name` resolved; appears on profile | g/i, B04 | **PASS** |
+| S1-LOC-2 | Second Headquarters → `422 "Company already has a Headquarters"`; existing HQ unchanged (no auto-demotion) | h, B04 | **PASS** |
+| S1-LOC-3 | Unknown `country_code`, invalid `type`, missing required field → 422 | g/h/i, §8.2.4 | **PASS** |
+| S1-LOC-4 | `PUT` location → 200; unknown → 404 | B04 | **PASS** |
+| S1-LOC-5 | `DELETE` location → 204; removing the HQ is allowed (company may reach zero locations, derived `hq_location` → null); re-add works | h, B04 | **PASS** |
+
+### S1.5 References (scope k/m, B06, §8.1.2/§8.2.5)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-REF-1 | Create → 201 with `added_by` = session user (`admin@localhost`) and timestamps | k, B06 | **PASS** |
+| S1-REF-2 | `PUT` preserves `added_by` and `created_at`, refreshes `updated_at`; title/url/desc updated | B06 | **PASS** |
+| S1-REF-3 | References scoped to one company (another company sees none); listed on profile (id desc) | B06 | **PASS** |
+| S1-REF-4 | Missing title/url → 422; delete → 204; unknown → 404 | B06, §8.2.5 | **PASS** |
+
+### S1.6 News (scope l/m/n, B07, §8.1.2/§8.2.6)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-NEWS-1 | UI create → 201, `is_scraped` false | l/m, B07 | **PASS** |
+| S1-NEWS-2 | Workflow create with `is_scraped:true` → true | n, B07 | **PASS** |
+| S1-NEWS-3 | Malformed `published_at` → 422 | B07 | **PASS** |
+| S1-NEWS-4 | `PUT` with `is_scraped` omitted preserves the current value; edits reflected | B07, §8.2.6 | **PASS** |
+| S1-NEWS-5 | Listed newest-first on profile; delete → 204 | B07 | **PASS** |
+
+### S1.7 Logos (scope o/p/q, B08, §8.1.3/§8.2.7)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-LOGO-1 | Upload `image/png` → 201 logo row (`source:"logo"`, `download_url`); `logo_url` set on list + profile | o, B08, §8.2.7 | **PASS** |
+| S1-LOGO-2 | Non-image upload → `415 {"detail":"Logo must be an image"}` | §8.2.7 | **PASS** |
+| S1-LOGO-3 | Replace → new row, old bytes removed, exactly one logo; logos excluded from the generic artifact list and `artifacts_count` | o, §8.1.3/§8.2.7 | **PASS** |
+| S1-LOGO-4 | Logo bytes served via the content endpoint (auth-gated, image content-type); browser renders the `logo_url` `<img>` inline despite `Content-Disposition: attachment` (CDP check) | o/p, B08 | **PASS** |
+| S1-LOGO-5 | `DELETE` logo → 204, `logo_url` → null; second delete → 404 | B08, §8.2.7 | **PASS** |
+
+### S1.8 Documents (scope p, §8.1.4/§8.2.8)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-DOC-1 | Generate for complete seed company → 201, `source:"generated"`, valid `%PDF` bytes | p, §8.2.8 | **PASS** |
+| S1-DOC-2 | Incomplete company → `422` exact body `{success:false,message:"Not enough information to generate a document",artifact:null}` | §8.1.4/§8.2.8 | **PASS** |
+| S1-DOC-3 | Unknown company → 404 | §8.2.8 | **PASS** |
+| S1-DOC-4 | Generated doc is a non-logo artifact (`artifacts_count` excludes logos) | §8.1.3/§8.1.4 | **PASS** |
+| S1-DOC-5 | Generation with a logo set still succeeds (logo embeddable or skipped — never a failure) | p, B08, §8.2.8 | **PASS** |
+
+### S1.9 Frontend (scope a/f/g/j/k/l/m/o/p, B01–B09, §8.5/§8.6)
+
+Static review of `frontend/` rendering logic **plus** live browser automation
+(CDP headless Chrome via `tests/run.sh`; the v0.1 "not automated" limitation is
+superseded). Evidence: `tests/browser/` suite — 34 tests, all pass.
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-FE-1 | All 7 JS modules pass `node --check`; SPA shell + CSS + JS assets serve 200 with correct MIME types | §5 | **PASS** |
+| S1-FE-2 | Login view renders when unauthenticated; nav hidden; login navigates to the companies list; nav visible after; logout returns to login | a, B01 | **PASS** |
+| S1-FE-3 | Country multi-select filter narrows the list (GB → HSBC/Shell), clearing restores the full list | j, B05 | **PASS** |
+| S1-FE-4 | Add/edit form uses an industry dropdown (6+ choices) and carries an ADD-mode locations editor | d/f/g, B02/B04 | **PASS** |
+| S1-FE-5 | Profile shows Locations/References/News/Logo sections; locations editor add/edit/remove; second-HQ error surfaced | g/k/l/o | **PASS** |
+| S1-FE-6 | References add/edit/remove via UI; edit preserves "Added by admin@localhost" | k/m, B06 | **PASS** |
+| S1-FE-7 | News add/edit/remove via UI; UI-created records show "Not scraped"; edits preserve the flag | l/m, B07 | **PASS** |
+| S1-FE-8 | Logo upload renders inline on the profile (`<img>` decodes: `naturalWidth>0`) despite the attachment content-disposition; appears as a list thumbnail; replace swaps the image; remove renders nothing ("No logo set") | o/p, B08 | **PASS** |
+| S1-FE-9 | Industry management view lists/adds/renames (no delete); rename propagates to companies | f, B03 | **PASS** |
+| S1-FE-10 | SPA re-fetches on render; no client-side authoritative state; all injected text escaped | §8.6 | **PASS** |
+
+### S1.10 Regression (scope r)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S1-REG-1 | v0.1 artifact upload/download/delete still works (now auth-gated) | r | **PASS** |
+| S1-REG-2 | v0.1 browse/search-by-name, profile, PDF generation flows pass (live + browser suite) | r | **PASS** |
+| S1-REG-3 | Seeding never overwrites user data; flush was a one-time dev-data reset (item u) | t/u | **PASS** |
+
+## S2. Evidence
+
+All evidence under `./tmp/verify-sprint01/` (gitignored):
+
+- `server.log` — server startup; the auto-generated admin password printed on
+  startup (scope item b), parsed and used for the real login path.
+- `evidence/` — 90+ captured `curl` responses (JSON bodies, headers, the
+  generated PDF `s1-doc.pdf`, the logo bytes `s1-logo-content.bin`, and the SPA
+  shell `s1-root.html`).
+- `verify_sprint01.py` — the live driver (93 checks, all passing).
+- `tests/run.sh` output: **51** backend `pytest` checks pass (auth gate on every
+  route, industries/countries/companies/locations/references/news/logos/
+  documents/seed) and **34** browser tests pass (15 smoke + 19 interaction,
+  incl. the Stage 8 additions for edit flows and logo upload/replace/remove +
+  inline render).
+- Frontend static review: `node --check` passes for all seven JS modules; all
+  assets serve `200` with correct MIME types.
+
+Selected captured responses:
+
+- Login (`evidence/s1-login.json`): `{"id":1,"email":"admin@localhost"}` with a
+  `session` cookie; wrong password → `{"detail":"Invalid email or password"}`.
+- List (`evidence/s1-companies.json`): six real companies; Shell →
+  `"hq_location":"London, GB"`, `industry:{...}`, `logo_url:null`,
+  `is_complete:true`.
+- Country filter (`evidence/s1-country-gb-fr.json`): `?countries=GB,FR` →
+  `[3,5,6]`; `?countries=` → `[]`.
+- Second HQ (`evidence/s1-loc-second-hq.json`): `{"detail":"Company already has
+  a Headquarters"}`.
+- Reference edit (`evidence/s1-ref-put.json`): `added_by`/`created_at`
+  preserved, `updated_at` refreshed, title/description updated.
+- Logo (`evidence/s1-logo-replace.json`): replace returns a fresh `logo` row;
+  profile `logo_url` points at it; generic artifact list empty;
+  `artifacts_count:0`.
+- Document generate (`evidence/s1-doc-generate.json`): `201 success:true` with
+  a `generated` PDF artifact; `evidence/s1-doc.pdf` is a valid `%PDF`.
+
+## S3. Failures
+
+**None.** All 93 live checks, 51 backend tests, and 34 browser tests pass. No
+requirement failures were observed.
+
+## S4. Notes (documented observations, not failures)
+
+1. **Admin password test seam.** `backend/routers/auth.py` honors a
+   `COMPANY_HUB_ADMIN_PASSWORD` env override when set; otherwise (the `./run.sh`
+   path) it generates and prints a fresh complex password on every startup, per
+   scope item b. The override is used by `tests/run.sh`/`pytest` so automated
+   runs are deterministic. It is **not** described in `docs/architecture.md`
+   §8.1.2/§8.8 and is an undocumented dev/test seam. The live verification used
+   the real printed-password path.
+2. **UK → GB mapping.** Per architecture §8.1.2 note and §8.8 note 1, the
+   standard list stores `GB`/"United Kingdom"; Shell's HQ is London, GB and the
+   derived `hq_location` renders "London, GB" (scope/brief text says "UK").
+   Verified as intended.
+3. **`?countries=` present-but-empty.** An explicitly present-but-empty
+   `countries=` is an *active* filter returning `[]`; the SPA omits the
+   parameter entirely when nothing is selected. Verified as intended (Stage 7
+   note confirmed).
+4. **Second-resolution timestamps.** `created_at`/`updated_at` are
+   second-resolution; the report asserts preservation/refresh, never strict
+   `created_at < updated_at`.
+5. **Auth now gates content endpoints.** Unlike v0.1, `GET /api/artifacts/{id}/content`
+   and every other `/api/` route require a session (scope item a); the SPA
+   carries the cookie on subresource fetches, so logo `<img>` inline rendering
+   works (confirmed via CDP).
+6. **Logo content-disposition.** Logo/artifact downloads set
+   `Content-Disposition: attachment`; browsers render `<img>` subresource
+   fetches inline regardless. Confirmed in headless Chrome (`naturalWidth > 0`).
+7. **Browser automation supersedes the v0.1 limitation** (see header note).
+
+## S5. Limitations
+
+- Live `curl` checks ran against a throwaway DB
+  (`tmp/verify-sprint01/verify.db`) to keep the gitignored dev `data/` pristine;
+  `data/` was confirmed unchanged afterwards.
+- Browser automation runs headless Chrome via `tests/run.sh` against its own
+  throwaway DB with a fixed admin password (env override). The Sprint 01 UI
+  flows (login, country filter, industry management, locations/references/news
+  add/edit/remove, logo upload/replace/remove, inline logo render) are covered;
+  visual styling/PDF pixel rendering was not asserted.
+- The browser suite and `pytest` are the persistent suites in this repo and
+  remain the ongoing regression guard; this section records their results for
+  the sprint.

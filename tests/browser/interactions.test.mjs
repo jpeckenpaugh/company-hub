@@ -4,6 +4,30 @@ import { before, after, test } from "node:test";
 import assert from "node:assert/strict";
 import { connect, loginEvalJs } from "./cdp.mjs";
 
+// Tiny valid PNGs for logo upload flows (1x1 red, 2x2 blue). The logo endpoint
+// gates on the image/* content-type only, and the inline-render checks need
+// bytes the browser can actually decode.
+const TINY_PNG_A =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+const TINY_PNG_B =
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEElEQVR4nGNgYPj/H4KhDAA/0gf5tBJPzQAAAABJRU5ErkJggg==";
+
+// Build a page-side expression that drops a File onto a file input and submits
+// its form. Used to drive the logo upload/replace UI through the real handler.
+function fileUploadJs(selector, b64, name, mime) {
+  return `
+    (() => {
+      const bytes = Uint8Array.from(atob(${JSON.stringify(b64)}), (c) => c.charCodeAt(0));
+      const file = new File([bytes], ${JSON.stringify(name)}, { type: ${JSON.stringify(mime)} });
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      const input = document.getElementById(${JSON.stringify(selector)});
+      input.files = dt.files;
+      input.closest('form').dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `;
+}
+
 const BASE = process.env.COMPANY_HUB_URL || "http://127.0.0.1:8000";
 const PW = process.env.COMPANY_HUB_ADMIN_PASSWORD || "test-admin-password";
 
@@ -175,5 +199,205 @@ test("company created via form with location lands on its profile", async () => 
     await cdp.waitFor(
       `location.hash.startsWith('#/companies/') && (document.body.innerText||'').includes('UI Created Co') && (document.body.innerText||'').includes('London')`
     )
+  );
+});
+
+// --- Sprint 01 edit flows (Stage 8 additions) ---
+
+test("location edited via UI", async () => {
+  await cdp.evalJs("location.hash = '#/companies/1'");
+  await cdp.waitFor(`!!document.querySelector('.edit-location')`);
+  await cdp.evalJs(`
+    (() => {
+      [...document.querySelectorAll('.edit-location')].find((b) => b.parentElement.parentElement.innerText.includes('Global HQ')).click();
+    })()
+  `);
+  await cdp.waitFor(`!!document.getElementById('location-form')`);
+  await cdp.evalJs(`
+    (() => {
+      const f = document.getElementById('location-form');
+      f.elements['city'].value = 'Nagoya';
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(
+    await cdp.waitFor(
+      `(document.body.innerText||'').includes('Nagoya') && !(document.body.innerText||'').includes('Toyota City')`
+    )
+  );
+  await cdp.waitFor(`!!document.querySelector('.edit-location')`);
+  await cdp.evalJs(`
+    (() => {
+      [...document.querySelectorAll('.edit-location')].find((b) => b.parentElement.parentElement.innerText.includes('Global HQ')).click();
+    })()
+  `);
+  await cdp.waitFor(`!!document.getElementById('location-form')`);
+  await cdp.evalJs(`
+    (() => {
+      const f = document.getElementById('location-form');
+      f.elements['city'].value = 'Toyota City';
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(await cdp.waitFor(`(document.body.innerText||'').includes('Toyota City')`));
+});
+
+test("reference edited via UI preserves adder", async () => {
+  await cdp.evalJs("location.hash = '#/companies/1'");
+  await cdp.waitFor(`!!document.getElementById('add-reference-btn')`);
+  await cdp.evalJs(`
+    (() => {
+      document.getElementById('add-reference-btn').click();
+      const f = document.getElementById('reference-form');
+      f.elements['title'].value = 'Edit Me Ref';
+      f.elements['url'].value = 'https://example.org/editme';
+      f.elements['description'].value = 'before edit';
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(await cdp.waitFor(`(document.body.innerText||'').includes('Edit Me Ref')`));
+  assert.ok(
+    await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('added by admin@localhost')`)
+  );
+  await cdp.evalJs(`
+    (() => {
+      [...document.querySelectorAll('.edit-reference')].find((b) => b.parentElement.parentElement.innerText.includes('Edit Me Ref')).click();
+    })()
+  `);
+  await cdp.waitFor(`!!document.getElementById('reference-form')`);
+  await cdp.evalJs(`
+    (() => {
+      const f = document.getElementById('reference-form');
+      f.elements['title'].value = 'Renamed Ref';
+      f.elements['description'].value = 'after edit';
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(
+    await cdp.waitFor(
+      `(document.body.innerText||'').includes('Renamed Ref') && !(document.body.innerText||'').includes('Edit Me Ref') && (document.body.innerText||'').includes('after edit')`
+    )
+  );
+  assert.ok(
+    await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('added by admin@localhost')`)
+  );
+});
+
+test("edited reference removed via UI", async () => {
+  await cdp.evalJs(`
+    (() => {
+      const btn = [...document.querySelectorAll('.remove-reference')].find((b) => b.parentElement.parentElement.innerText.includes('Renamed Ref'));
+      window.confirm = () => true;
+      btn.click();
+    })()
+  `);
+  assert.ok(
+    await cdp.waitFor(`!(document.body.innerText||'').includes('Renamed Ref')`)
+  );
+});
+
+test("news added via UI is not scraped", async () => {
+  await cdp.evalJs("location.hash = '#/companies/1'");
+  await cdp.waitFor(`!!document.getElementById('add-news-btn')`);
+  await cdp.evalJs(`
+    (() => {
+      document.getElementById('add-news-btn').click();
+      const f = document.getElementById('news-form');
+      f.elements['title'].value = 'News Add Ref';
+      f.elements['source'].value = 'Example Wire';
+      f.elements['url'].value = 'https://example.org/news';
+      f.elements['published_at'].value = '2026-08-15';
+      f.elements['summary'].value = 'a summary';
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(await cdp.waitFor(`(document.body.innerText||'').includes('News Add Ref')`));
+  assert.ok(await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('not scraped')`));
+});
+
+test("news edited via UI", async () => {
+  await cdp.evalJs(`
+    (() => {
+      [...document.querySelectorAll('.edit-news')].find((b) => b.parentElement.parentElement.innerText.includes('News Add Ref')).click();
+    })()
+  `);
+  await cdp.waitFor(`!!document.getElementById('news-form')`);
+  await cdp.evalJs(`
+    (() => {
+      const f = document.getElementById('news-form');
+      f.elements['title'].value = 'News Updated Title';
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(
+    await cdp.waitFor(
+      `(document.body.innerText||'').includes('News Updated Title') && !(document.body.innerText||'').includes('News Add Ref')`
+    )
+  );
+});
+
+test("news removed via UI", async () => {
+  await cdp.evalJs(`
+    (() => {
+      const btn = [...document.querySelectorAll('.remove-news')].find((b) => b.parentElement.parentElement.innerText.includes('News Updated Title'));
+      window.confirm = () => true;
+      btn.click();
+    })()
+  `);
+  assert.ok(
+    await cdp.waitFor(`!(document.body.innerText||'').includes('News Updated Title')`)
+  );
+});
+
+// --- Logo UI flows + inline-render confirmation (Stage 8 additions) ---
+
+test("logo uploaded via UI renders inline on profile", async () => {
+  await cdp.evalJs("location.hash = '#/companies/1'");
+  await cdp.waitFor(`!!document.getElementById('logo-file')`);
+  await cdp.evalJs(fileUploadJs("logo-file", TINY_PNG_A, "logo.png", "image/png"));
+  assert.ok(
+    await cdp.waitFor(
+      `!!document.querySelector('.profile-logo') && (() => { const i = document.querySelector('.profile-logo'); return i.complete && i.naturalWidth > 0; })()`
+    )
+  );
+});
+
+test("logo shown as thumbnail on companies list", async () => {
+  await cdp.evalJs("location.hash = '#/'");
+  assert.ok(await cdp.waitFor(`!!document.querySelector('.company-logo-thumb')`));
+  assert.ok(
+    await cdp.evalJs(
+      `(() => { const i = document.querySelector('.company-logo-thumb'); return i.complete && i.naturalWidth > 0; })()`
+    )
+  );
+});
+
+test("logo replaced via UI", async () => {
+  await cdp.evalJs("location.hash = '#/companies/1'");
+  await cdp.waitFor(`!!document.getElementById('logo-file')`);
+  const before = await cdp.evalJs(`(document.querySelector('.profile-logo')||{}).src || ''`);
+  await cdp.evalJs(fileUploadJs("logo-file", TINY_PNG_B, "logo2.png", "image/png"));
+  assert.ok(
+    await cdp.waitFor(
+      `!!document.querySelector('.profile-logo') && document.querySelector('.profile-logo').src !== ${JSON.stringify(before)}`
+    )
+  );
+  assert.ok(
+    await cdp.evalJs(
+      `(() => { const i = document.querySelector('.profile-logo'); return i.complete && i.naturalWidth > 0; })()`
+    )
+  );
+});
+
+test("logo removed via UI renders nothing", async () => {
+  await cdp.evalJs(`
+    (() => {
+      window.confirm = () => true;
+      document.getElementById('logo-remove').click();
+    })()
+  `);
+  assert.ok(await cdp.waitFor(`!document.querySelector('.profile-logo')`));
+  assert.ok(
+    await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('no logo set')`)
   );
 });
