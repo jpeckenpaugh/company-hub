@@ -46,3 +46,19 @@
   (Stage 5) decision.
 - `run.sh` currently expects the backend entry point to exist; running it
   before Stage 6 will fail at import time.
+
+## Sprint 01 — manual dev-data flush (Stage 5 note)
+
+This sprint rebuilds the data model (new tables: industries, countries, users,
+sessions, locations, references, news_articles; `companies` drops `hq_location`
+and the free-form `industry`). The v0.1 SQLite database is **not** migrated.
+Per scope item u, flush the gitignored dev runtime state once before the first
+run of the new build (performed by Stage 6):
+
+```
+rm -f data/company_hub.db && rm -rf data/artifacts
+```
+
+The app seeds only when the `companies` table is empty and never destroys data
+on a normal restart. `data/` is gitignored, so no repository history is
+affected.
