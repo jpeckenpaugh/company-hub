@@ -1,11 +1,20 @@
-"""Artifact upload / list / download / delete."""
+"""Artifact upload / list / download / delete, plus logo upload/replace/remove.
+
+Logos are stored objects like any other artifact (bytes under
+``data/artifacts/<company_id>/`` plus a metadata row with ``source = 'logo'``)
+but are surfaced separately via ``logo_url`` and excluded from the generic
+Files & artifacts list. At most one logo per company is enforced by a partial
+unique index; replacing one deletes the previous row (and its bytes) before
+inserting the new row within a single transaction.
+"""
 
 from fastapi import APIRouter, HTTPException, UploadFile
+
+from backend.services import storage
 from fastapi.responses import FileResponse
 
 from backend.db import connection, utc_now
 from backend.models import artifact_to_dict
-from backend.services import storage
 
 router = APIRouter(tags=["artifacts"])
 
@@ -28,38 +37,54 @@ def _fetch_artifact(conn, artifact_id: int):
     return row
 
 
-@router.post("/companies/{company_id}/artifacts", status_code=201)
-def upload_artifact(company_id: int, file: UploadFile):
-    filename = file.filename or ""
-    if not filename.strip():
+def _require_filename(file: UploadFile) -> None:
+    if not (file.filename or "").strip():
         raise HTTPException(
             status_code=422, detail="A file part with a filename is required"
         )
+
+
+def _insert_artifact_row(
+    conn, company_id: int, original_name: str, stored_filename: str,
+    content_type: str, content: bytes, source: str,
+):
+    cur = conn.execute(
+        "INSERT INTO artifacts (company_id, original_name, stored_filename, "
+        "content_type, size_bytes, created_at, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (
+            company_id,
+            original_name,
+            stored_filename,
+            content_type,
+            len(content),
+            utc_now(),
+            source,
+        ),
+    )
+    return conn.execute(
+        "SELECT * FROM artifacts WHERE id = ?", (cur.lastrowid,)
+    ).fetchone()
+
+
+@router.post("/companies/{company_id}/artifacts", status_code=201)
+def upload_artifact(company_id: int, file: UploadFile):
+    _require_filename(file)
     content = file.file.read()
-    stored_filename = storage.new_stored_filename(filename)
+    stored_filename = storage.new_stored_filename(file.filename or "")
+    storage.save(company_id, stored_filename, content)
     try:
-        storage.save(company_id, stored_filename, content)
         with connection() as conn:
             _fetch_company(conn, company_id)
-            cur = conn.execute(
-                "INSERT INTO artifacts (company_id, original_name, "
-                "stored_filename, content_type, size_bytes, created_at, source) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'upload')",
-                (
-                    company_id,
-                    filename,
-                    stored_filename,
-                    file.content_type or "application/octet-stream",
-                    len(content),
-                    utc_now(),
-                ),
+            row = _insert_artifact_row(
+                conn,
+                company_id,
+                file.filename,
+                stored_filename,
+                file.content_type or "application/octet-stream",
+                content,
+                "upload",
             )
-            row = conn.execute(
-                "SELECT * FROM artifacts WHERE id = ?", (cur.lastrowid,)
-            ).fetchone()
-    except HTTPException:
-        storage.delete(company_id, stored_filename)
-        raise
     except Exception:
         storage.delete(company_id, stored_filename)
         raise
@@ -71,7 +96,8 @@ def list_artifacts(company_id: int):
     with connection() as conn:
         _fetch_company(conn, company_id)
         rows = conn.execute(
-            "SELECT * FROM artifacts WHERE company_id = ? ORDER BY id DESC",
+            "SELECT * FROM artifacts WHERE company_id = ? AND source != 'logo' "
+            "ORDER BY id DESC",
             (company_id,),
         ).fetchall()
         return [artifact_to_dict(r) for r in rows]
@@ -97,4 +123,59 @@ def delete_artifact(artifact_id: int):
         row = _fetch_artifact(conn, artifact_id)
         conn.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))
     storage.delete(row["company_id"], row["stored_filename"])
+    return None
+
+
+@router.post("/companies/{company_id}/logo", status_code=201)
+def upload_logo(company_id: int, file: UploadFile):
+    _require_filename(file)
+    if not (file.content_type or "").startswith("image/"):
+        raise HTTPException(status_code=415, detail="Logo must be an image")
+    with connection() as conn:
+        _fetch_company(conn, company_id)
+    content = file.file.read()
+    stored_filename = storage.new_stored_filename(file.filename or "")
+    storage.save(company_id, stored_filename, content)
+    old_row = None
+    try:
+        with connection() as conn:
+            _fetch_company(conn, company_id)
+            old_row = conn.execute(
+                "SELECT * FROM artifacts WHERE company_id = ? AND source = 'logo' "
+                "ORDER BY id DESC LIMIT 1",
+                (company_id,),
+            ).fetchone()
+            conn.execute(
+                "DELETE FROM artifacts WHERE company_id = ? AND source = 'logo'",
+                (company_id,),
+            )
+            row = _insert_artifact_row(
+                conn,
+                company_id,
+                file.filename,
+                stored_filename,
+                file.content_type or "application/octet-stream",
+                content,
+                "logo",
+            )
+    except Exception:
+        storage.delete(company_id, stored_filename)
+        raise
+    if old_row is not None:
+        storage.delete(company_id, old_row["stored_filename"])
+    return artifact_to_dict(row)
+
+
+@router.delete("/companies/{company_id}/logo", status_code=204)
+def delete_logo(company_id: int):
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM artifacts WHERE company_id = ? AND source = 'logo' "
+            "ORDER BY id DESC LIMIT 1",
+            (company_id,),
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Logo not found")
+        conn.execute("DELETE FROM artifacts WHERE id = ?", (row["id"],))
+    storage.delete(company_id, row["stored_filename"])
     return None

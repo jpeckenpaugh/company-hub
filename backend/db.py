@@ -3,6 +3,12 @@
 The runtime storage root is anchored to the repository root (the parent of the
 ``backend`` package) rather than the process working directory so the app is
 robust regardless of where it is launched from.
+
+Sprint 01 rebuilt the data model (industries, countries, users, sessions,
+locations, references, news_articles; ``companies`` now carries ``industry_id``
+and has no free-form ``industry``/``hq_location``). The v0.1 database is not
+migrated; per scope item u the operator flushes ``data/`` once before the first
+run of this build.
 """
 
 import sqlite3
@@ -16,11 +22,37 @@ ARTIFACTS_DIR = DATA_DIR / "artifacts"
 DB_PATH = DATA_DIR / "company_hub.db"
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS industries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS countries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
-    industry TEXT,
-    hq_location TEXT,
+    industry_id INTEGER REFERENCES industries(id),
     website TEXT,
     contact_email TEXT,
     contact_phone TEXT,
@@ -29,19 +61,59 @@ CREATE TABLE IF NOT EXISTS companies (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS locations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    address TEXT,
+    city TEXT NOT NULL,
+    country_code TEXT NOT NULL REFERENCES countries(code),
+    type TEXT NOT NULL CHECK (type IN ('Headquarters','Office','Plant','Other'))
+);
+
+CREATE TABLE IF NOT EXISTS "references" (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    description TEXT,
+    added_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS news_articles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL,
+    url TEXT NOT NULL,
+    published_at TEXT NOT NULL,
+    summary TEXT,
+    is_scraped INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS artifacts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    company_id INTEGER NOT NULL,
+    company_id INTEGER NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     original_name TEXT NOT NULL,
     stored_filename TEXT NOT NULL,
     content_type TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
     created_at TEXT NOT NULL,
-    source TEXT NOT NULL,
-    FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE
+    source TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_locations_company ON locations(company_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_locations_one_hq
+    ON locations(company_id) WHERE type = 'Headquarters';
+CREATE INDEX IF NOT EXISTS idx_references_company ON "references"(company_id);
+CREATE INDEX IF NOT EXISTS idx_news_company ON news_articles(company_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_company ON artifacts(company_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_one_logo
+    ON artifacts(company_id) WHERE source = 'logo';
 """
 
 
