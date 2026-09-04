@@ -15,8 +15,8 @@ product.
 
 - `enhancements/scope.md` (Stage 1).
 - `features/*.md` (Stage 2) — the new feature list.
-- Existing feature briefs under `features/completed/briefs/` (for context on
-  the existing behavior these features extend).
+- Existing feature briefs under `archive/build/features/completed/briefs/` (for
+  context on the existing behavior these features extend).
 
 ## Outputs
 
@@ -33,7 +33,7 @@ product.
 ## Instructions
 
 1. Read `enhancements/scope.md` and every file in `features/`.
-2. Read the relevant existing briefs under `features/completed/briefs/` so the
+2. Read the relevant existing briefs under `archive/build/features/completed/briefs/` so the
    new behavior is described relative to what already exists.
 3. For every feature file in `features/`, write one brief.
 4. Keep the numbering and naming in sync with the feature files: for each

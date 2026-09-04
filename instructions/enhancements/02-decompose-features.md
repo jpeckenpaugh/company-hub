@@ -8,14 +8,14 @@ implemented.
 
 Because this pass extends an existing app, the features produced here are
 **additions** to the existing v0.1 features (which live under
-`features/completed/`). The fresh `features/` folder holds only the new
+`archive/build/features/completed/`). The fresh `features/` folder holds only the new
 capabilities for this pass.
 
 ## Inputs
 
 - `enhancements/scope.md` (Stage 1).
-- Existing features under `features/completed/` (for context on what already
-  exists, to avoid duplicating it).
+- Existing features under `archive/build/features/completed/` (for context on
+  what already exists, to avoid duplicating it).
 
 ## Outputs
 
@@ -29,7 +29,7 @@ capabilities for this pass.
 
 1. Read `enhancements/scope.md`.
 2. Identify the discrete capabilities the in-scope enhancements require beyond
-   what already exists in `features/completed/`.
+   what already exists in `archive/build/features/completed/`.
 3. Name each capability clearly and concisely.
 4. Create the `features/` folder.
 5. Write one file per new feature, numbered sequentially, e.g.,
@@ -37,7 +37,7 @@ capabilities for this pass.
    place of `<name>`.
 6. Ensure the feature files fully cover every in-scope enhancement; do not
    silently drop any.
-7. Do not duplicate capabilities that already exist in `features/completed/`;
+7. Do not duplicate capabilities that already exist in `archive/build/features/completed/`;
    decompose only the new work.
 8. Stay at the capability level. Do not describe behavior, workflows, or
    implementation.
@@ -53,7 +53,7 @@ capabilities for this pass.
 - Do NOT write product decisions, constraints, or clarifications back into
   `enhancements/scope.md`; capture them in the feature files and your summary.
 - Do NOT re-decompose existing v0.1 features that are already in
-  `features/completed/`.
+  `archive/build/features/completed/`.
 - Do NOT jump ahead to design or architecture.
 
 ## Summary

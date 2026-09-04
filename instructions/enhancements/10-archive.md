@@ -15,7 +15,9 @@ or a prior sprint).
 - Run-specific target: the phase(s) to archive (e.g. `build`, `sprint01`,
   `sprint02`). Supplied by the Stage Manager for this run.
 - The artifacts produced for that phase:
-  - For a **build** phase: `features/completed/` and `features/completed/briefs/`.
+  - For a **build** phase: normally handled by the build pipeline's Stage 10
+    (`instructions/build/10-archive.md`); this mode applies to an unarchived
+    build whose working artifacts are `features/` and `features/briefs/`.
   - For a **sprint** phase: the sprint concept file (`enhancements/sprintNN.md`),
     the agreed scope (`enhancements/scope.md`), that sprint's feature files under
     `features/`, its `features/briefs/`, and its per-stage summaries under
@@ -30,7 +32,7 @@ or a prior sprint).
 ## Instructions
 
 1. Determine the phase(s) from the run target.
-2. For a **build** phase: `git mv features/completed` to
+2. For a **build** phase (unarchived build): `git mv features` to
    `archive/build/features/completed` (including its `briefs/`).
 3. For a **sprint** phase: `git mv` into `archive/<phase>/`:
    - the sprint concept file (`sprintNN.md`),

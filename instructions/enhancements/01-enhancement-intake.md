@@ -17,8 +17,8 @@ instead, the agreed scope is drawn from the sprint concept.
   source for this pass). The concrete sprint file path is supplied by the Stage
   Manager as the run-specific target (e.g. `enhancements/sprint02.md`).
 - The existing application and its constraints — read the existing documentation
-  **and code** (`docs/architecture.md`, `features/completed/`, `backend/`,
-  `frontend/`) as needed for context on what is being extended.
+  **and code** (`docs/architecture.md`, `archive/build/features/completed/`,
+  `backend/`, `frontend/`) as needed for context on what is being extended.
 - Stakeholder guidance on scope.
 
 ## Outputs

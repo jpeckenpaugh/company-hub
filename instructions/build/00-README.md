@@ -30,6 +30,8 @@ the roles read and write are described below.
 │   ├── architecture.md             Stage 5
 │   └── verification-report.md      Stage 8
 ├── README.md                       Stage 9
+├── archive/                        Stage 10 (archived phase artifacts)
+│   └── <phase>/                    completed builds, e.g. archive/build/
 ├── instructions/                   (this folder — pipeline docs)
 └── summaries/
     ├── 00-template.md
@@ -37,7 +39,8 @@ the roles read and write are described below.
 ```
 
 The `features/` folder is created by Stage 2 and `features/briefs/` by Stage 3.
-The `docs/` folder is created by Stage 5.
+The `docs/` folder is created by Stage 5. The `archive/` folder is created by
+Stage 10.
 
 ## Roles in order
 
@@ -52,6 +55,7 @@ The `docs/` folder is created by Stage 5.
 | 7     | Frontend Engineer       | `07-frontend.md`                    | code under `frontend/`                          |
 | 8     | Verification Engineer  | `08-verification.md`                | `docs/verification-report.md`                   |
 | 9     | Project Manager / Docs  | `09-documentation.md`               | `README.md`                                     |
+| 10    | Archive                 | `10-archive.md`                     | relocates a completed build's artifacts to `archive/` |
 
 ## Handoffs
 
@@ -62,11 +66,14 @@ role's work. The outputs of one role become the inputs of the next:
 ```
 concept.md (human-supplied seed) -> features/*.md -> features/briefs/*.md ->
 env scripts -> docs/architecture.md -> backend/ -> frontend/ ->
-docs/verification-report.md -> README.md
+docs/verification-report.md -> README.md -> archive/<phase>/ (Stage 10,
+relocates the completed build)
 ```
 
 Stage 1 is a human role: `concept.md` is supplied by the human and the stage is
 skipped when it already exists. It is the only stage not executed by an agent.
+Stage 10 (Archive) is optional and run on-demand (e.g. after a build completes)
+to relocate the completed build's artifacts to `archive/`.
 
 ## Summary requirement
 
@@ -118,3 +125,7 @@ directory (e.g. `/tmp`) or into the project tree.
   summaries). The human edits `concept.md` directly if they wish.
 - Each stage commits and pushes its work to the current branch as its final
   step (see "Per-stage commits").
+- Stage 10 (Archive) relocates a completed build's artifacts to `archive/`
+  using `git mv`; it does not delete or alter content, and it does not touch
+  persistent/cumulative artifacts (`docs/`, `backend/`, `frontend/`, environment
+  scripts, `README.md`, `concept.md`).
