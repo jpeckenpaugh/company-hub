@@ -38,7 +38,8 @@ and in parallel. This is reference documentation, not code.
 │   │   ├── storage.py             # object storage (file bytes) + path mapping
 │   │   └── pdf.py                 # PDF summary generation (fpdf2)
 │   └── data/
-│       └── seed.py                # seed companies (structured data only)
+│       ├── seed.py                # seed content + seed-on-empty logic
+│       └── logos/                 # committed raster logo bytes (one per company)
 ├── frontend/                      # Bootstrap SPA (Stage 7)
 │   ├── index.html                 # entry page; mounts the SPA
 │   ├── css/style.css              # custom styles over Bootstrap
@@ -145,9 +146,10 @@ derived, never stored.
 
 ### Seed data
 
-On first startup (empty `companies` table), `backend/data/seed.py` inserts a
-small set of realistic companies (see `concept.md`: a small set of realistic
-firms). Seed data includes structured fields only — no artifacts are seeded.
+On first startup (empty `companies` table), `backend/data/seed.py` inserts the
+six real companies plus per-company locations, references, news, and logos (see
+§8.1.5). Seed data includes structured fields and committed raster logos copied
+into artifact storage — no generated artifacts are seeded.
 Seeding happens only when the `companies` table is empty; it never overwrites
 user-entered data.
 
@@ -632,7 +634,17 @@ On a fresh/empty database the app seeds:
 
   (Shell's HQ is London, UK → `GB`, per the §8.1.2 note.)
 
-- No references, news, logos, or artifacts are seeded.
+- Real supporting content per company, keyed by name in `seed.py`:
+  - One or two further real locations (Office/Plant; deliberately no GB/FR
+    offices on non-GB/FR companies so the country filter stays stable).
+  - Two references each: a Wikipedia article and an official
+    about/company-profile page, with `added_by = admin@localhost`.
+  - Three to five genuine recent news articles with `is_scraped = 0`
+    (hand-authored, not scraped).
+  - One logo each: raster PNG bytes committed under `backend/data/logos/` and
+    copied into artifact storage at seed time as an artifacts row with
+    `source = 'logo'` (so the seeded logos render in the UI and embed in
+    generated PDFs).
 - Seeding happens only when the `companies` table is empty; it never overwrites
   user-entered data. The bootstrap admin user is the one exception to
   seed-on-empty: it is upserted with a fresh password on **every** startup
@@ -647,6 +659,11 @@ the gitignored dev runtime state **once** before the first run of the new build
 ```
 rm -f data/company_hub.db && rm -rf data/artifacts
 ```
+
+A later pass enriched the seed with references, news, locations, and logos; any
+database seeded before that pass must be flushed the same way to pick up the new
+seed content (seeding never runs on a non-empty `companies` table). `./flush.sh`
+wraps the flush.
 
 The app never deletes data on a normal restart and seeds only when empty.
 
@@ -1008,7 +1025,7 @@ frontend/
 | `backend/routers/references.py`, `news.py` | Own their sub-resource CRUD; `added_by` comes from the session. |
 | `backend/routers/artifacts.py` | Adds the logo upload/replace/remove endpoints (reuses storage). |
 | `backend/services/pdf.py` | Reads the locations/logos it is given; still no HTTP/DB. |
-| `backend/data/seed.py` | Seeds industries + countries + six real companies with one HQ each. |
+| `backend/data/seed.py` | Seeds industries + countries + six real companies with one HQ each, plus per-company locations, references, news, and logos. |
 | `frontend/*` | Adds login gate, industry management, locations editor, references/news sections, logo UI, country filter. |
 
 Ownership rules from §2 (routers do no raw SQL/file-bytes handling; storage owns

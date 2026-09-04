@@ -37,7 +37,7 @@ def test_list_shape_and_derived_fields(authed_client):
     }
     assert first["industry"]["name"]
     assert first["hq_location"]
-    assert first["logo_url"] is None
+    assert first["logo_url"] and first["logo_url"].startswith("/api/artifacts/")
     assert first["is_complete"] is True
 
     by = {c["name"]: c for c in data}

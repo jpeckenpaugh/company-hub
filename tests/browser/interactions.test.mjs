@@ -354,10 +354,11 @@ test("news removed via UI", async () => {
 test("logo uploaded via UI renders inline on profile", async () => {
   await cdp.evalJs("location.hash = '#/companies/1'");
   await cdp.waitFor(`!!document.getElementById('logo-file')`);
+  const before = await cdp.evalJs(`(document.querySelector('.profile-logo')||{}).src || ''`);
   await cdp.evalJs(fileUploadJs("logo-file", TINY_PNG_A, "logo.png", "image/png"));
   assert.ok(
     await cdp.waitFor(
-      `!!document.querySelector('.profile-logo') && (() => { const i = document.querySelector('.profile-logo'); return i.complete && i.naturalWidth > 0; })()`
+      `!!document.querySelector('.profile-logo') && document.querySelector('.profile-logo').src !== ${JSON.stringify(before)} && (() => { const i = document.querySelector('.profile-logo'); return i.complete && i.naturalWidth > 0; })()`
     )
   );
 });

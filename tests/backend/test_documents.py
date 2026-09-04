@@ -89,7 +89,7 @@ def test_locations_and_logo_do_not_count_toward_completeness(authed_client):
     )
     profile = authed_client.get(f"/api/companies/{cid}").json()
     assert profile["is_complete"] is True
-    assert len(profile["locations"]) == 1
+    assert len(profile["locations"]) >= 1
     assert authed_client.post(f"/api/companies/{cid}/documents/generate").status_code == 201
 
 

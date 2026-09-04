@@ -16,7 +16,7 @@ enhancement pass. Full details: `README.md`, `docs/architecture.md` (§8),
 | **News** | None | Per-company news articles (title, source, URL, publication date, summary) with a scraped-status flag for automated workflows |
 | **Logos** | None | One designated logo per company; upload/replace/remove from the UI; shown on profile and list; embedded in generated PDFs when possible |
 | **Company completeness** | All seven fields non-empty | Redefined: name + industry + website/email/phone/description (locations and logos do not count) |
-| **Seed data** | Small set of fictitious companies | Six real companies (Toyota, Samsung, HSBC, Novartis, Shell, Carrefour) — one of the biggest players per seeded industry, one Headquarters each |
+| **Seed data** | Small set of fictitious companies | Six real companies (Toyota, Samsung, HSBC, Novartis, Shell, Carrefour) — one of the biggest players per seeded industry. Each is seeded with a Headquarters plus further real locations, two references (Wikipedia + official about page), several genuine recent news articles, and a committed raster logo |
 | **API auth** | All `/api` routes public | All `/api` routes require a session except `POST /api/auth/login`; content endpoints gated too |
 | **Browser verification** | Static review + live curl only | Persistent CDP headless-Chrome suite (34 checks) covering login, filters, editors, and logo flows |
 

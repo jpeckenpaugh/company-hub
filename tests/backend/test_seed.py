@@ -1,4 +1,5 @@
-"""Seed-on-empty contents: industries, countries, companies + one HQ each."""
+"""Seed-on-empty contents: industries, countries, companies with locations,
+references, news, and logos."""
 
 from backend import db as db_module
 from backend.data.seed import SEED_COMPANIES, SEED_INDUSTRIES
@@ -38,9 +39,33 @@ def test_seeded_companies_each_with_one_headquarters(client):
     conn.close()
 
 
-def test_seed_has_no_references_news_logos_or_artifacts(client):
+def test_seed_has_references_news_locations_and_logos(client):
     conn = _conn(client)
-    for table in ("\"references\"", "news_articles", "artifacts"):
-        n = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"]
-        assert n == 0, f"{table} should be empty at seed"
+    for row in conn.execute("SELECT id, name FROM companies").fetchall():
+        cid = row["id"]
+
+        refs = conn.execute(
+            'SELECT COUNT(*) AS n FROM "references" WHERE company_id = ?', (cid,)
+        ).fetchone()["n"]
+        assert refs == 2, f"{row['name']} should have exactly two references"
+
+        news = conn.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(is_scraped), 0) AS s "
+            "FROM news_articles WHERE company_id = ?",
+            (cid,),
+        ).fetchone()
+        assert news["n"] >= 3, f"{row['name']} should have at least three news articles"
+        assert news["s"] == 0, f"{row['name']} news should be hand-authored, not scraped"
+
+        logos = conn.execute(
+            "SELECT COUNT(*) AS n FROM artifacts "
+            "WHERE company_id = ? AND source = 'logo'",
+            (cid,),
+        ).fetchone()["n"]
+        assert logos == 1, f"{row['name']} should have exactly one logo"
+
+        locs = conn.execute(
+            "SELECT COUNT(*) AS n FROM locations WHERE company_id = ?", (cid,)
+        ).fetchone()["n"]
+        assert locs >= 2, f"{row['name']} should have its HQ plus extra locations"
     conn.close()

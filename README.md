@@ -103,7 +103,10 @@ session, so you will be asked to log in on first use.
 On first start the backend creates the SQLite database under `data/` and seeds
 it with the standard data: six industries, the standard 83-entry country list,
 and exactly six real companies — one of the biggest players in each seeded
-industry, each carrying one Headquarters location:
+industry. Each company is seeded with a Headquarters location, one or two
+further real locations, two curated references (a Wikipedia article and its
+official about/company-profile page), several genuine recent news articles
+(hand-authored, not scraped), and a logo:
 
 | Industry | Company | HQ |
 |---|---|---|
@@ -114,17 +117,24 @@ industry, each carrying one Headquarters location:
 | Energy | Shell | London, GB |
 | Retail | Carrefour | Paris, FR |
 
+Seeded references use `added_by = admin@localhost` to mark them as
+backend-seeded rather than user-added.
+
 Seeding happens only when the `companies` table is empty; it never overwrites
 user data. Runtime data (the database and stored artifact bytes) live under
 `data/`, which is gitignored and never committed.
 
-**If you are holding a v0.1 database**, flush the gitignored dev runtime state
-once before the first run of this build (the data model was rebuilt in
-Sprint 01 and the v0.1 DB is not migrated):
+**If you are holding a database seeded before this build**, flush the gitignored
+dev runtime state once so the richer seed (references, news, logos, and extra
+locations) is created on the next start (seeding never runs on a non-empty
+`companies` table):
 
 ```sh
-rm -f data/company_hub.db && rm -rf data/artifacts
+./flush.sh
 ```
+
+`flush.sh` removes `data/company_hub.db` and `data/artifacts`; the next
+`./run.sh` seeds a fresh database from scratch.
 
 ## API
 
@@ -192,6 +202,12 @@ when its bytes are embeddable. The frontend gained `login.js` and
 and `form.js` for the login gate, industry management, the country multi-select
 filter, locations/references/news editors on the profile, logo
 upload/replace/remove, and the new payload rendering.
+
+The seed was later enriched with real content (`backend/data/seed.py`): each
+seeded company now also carries one or two further real locations, two curated
+references (Wikipedia + official about page, `added_by = admin@localhost`),
+several genuine recent news articles (`is_scraped = 0`), and a committed raster
+logo (`backend/data/logos/`) copied into artifact storage at seed time.
 
 ## Testing
 
