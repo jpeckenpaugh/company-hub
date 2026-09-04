@@ -11,6 +11,7 @@ migrated; per scope item u the operator flushes ``data/`` once before the first
 run of this build.
 """
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -18,8 +19,13 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = PROJECT_ROOT / "data"
-ARTIFACTS_DIR = DATA_DIR / "artifacts"
-DB_PATH = DATA_DIR / "company_hub.db"
+_OVERRIDE_DB = os.environ.get("COMPANY_HUB_DB")
+if _OVERRIDE_DB:
+    DB_PATH = Path(_OVERRIDE_DB)
+    ARTIFACTS_DIR = DB_PATH.parent / "artifacts"
+else:
+    DB_PATH = DATA_DIR / "company_hub.db"
+    ARTIFACTS_DIR = DATA_DIR / "artifacts"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS industries (

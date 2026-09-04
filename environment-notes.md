@@ -36,6 +36,43 @@
   them). `data/` is gitignored; nothing runtime-written should be committed.
 - No external services (S3, database servers) are provisioned.
 
+### Environment overrides
+
+Two environment variables make the storage root and the admin bootstrap
+deterministic, which the persistent test suites rely on:
+
+- `COMPANY_HUB_DB` — if set, the SQLite database is created at that exact path
+  and stored artifact bytes co-locate under `<dir of DB>/artifacts/`. When
+  unset, the app uses the default `data/company_hub.db` + `data/artifacts/`.
+- `COMPANY_HUB_ADMIN_PASSWORD` — if set, `bootstrap_admin` uses this as the
+  admin password instead of generating a fresh random one on every startup.
+  When unset, behavior is unchanged (a new random password is printed at boot).
+
+## Testing
+
+Dev-only test dependencies (nothing in `requirements.txt` is a test dependency):
+
+```
+.venv/bin/pip install -r requirements-dev.txt
+```
+
+The pinned dev deps are `pytest` (runner) and `httpx` (needed by FastAPI's
+`TestClient`).
+
+- **Backend suite** — persistent in-process pytest tests against throwaway
+  temp databases (never touches `data/`):
+  `.venv/bin/python -m pytest tests/backend -q`
+- **Browser suite** — persistent CDP tests that drive a real headless Chrome:
+  `node --test --test-concurrency=1 "tests/browser/*.test.mjs"` (requires a
+  running uvicorn and Chrome on `--remote-debugging-port=9222`).
+- **Everything** — `./tests/run.sh` runs both suites: it launches uvicorn with
+  a throwaway DB under `tmp/` and headless Chrome, runs the browser tests, then
+  tears both down. Logs land under `tmp/` (gitignored); the real `data/` is
+  never touched.
+
+The browser tests read `COMPANY_HUB_URL` (default `http://127.0.0.1:8000`) and
+`COMPANY_HUB_ADMIN_PASSWORD` (default `test-admin-password`).
+
 ## Caveats
 
 - `python-multipart` is required for FastAPI file uploads; do not remove it

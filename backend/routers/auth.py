@@ -7,6 +7,7 @@ restarts and end only on logout or removal. No expiry this sprint.
 
 import hashlib
 import hmac
+import os
 import secrets
 import sqlite3
 
@@ -50,7 +51,7 @@ def bootstrap_admin() -> None:
     """Generate a fresh complex admin password, store its hash, and print the
     current password to the console. Runs on every startup; any previously
     displayed password becomes invalid after a restart."""
-    password = secrets.token_urlsafe(24)
+    password = os.environ.get("COMPANY_HUB_ADMIN_PASSWORD") or secrets.token_urlsafe(24)
     with connection() as conn:
         conn.execute(
             "INSERT INTO users (email, password_hash, created_at) "

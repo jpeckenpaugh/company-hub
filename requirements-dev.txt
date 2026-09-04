@@ -1,0 +1,4 @@
+# Dev-only test dependencies. Install into .venv via:
+#   .venv/bin/pip install -r requirements-dev.txt
+pytest==9.1.1
+httpx==0.28.1
