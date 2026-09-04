@@ -1,8 +1,12 @@
 import { renderList } from "./list.js";
 import { renderProfile } from "./profile.js";
 import { renderForm } from "./form.js";
+import { renderIndustries } from "./industries.js";
+import { renderLogin } from "./login.js";
+import { me, logout, setOnUnauthorized } from "./api.js";
 
 const view = document.getElementById("view");
+let session = null;
 
 export function esc(value) {
   return String(value ?? "").replace(
@@ -73,10 +77,22 @@ export function showViewLoading() {
     </div>`;
 }
 
+export function setSession(user) {
+  session = user;
+  updateNav();
+  const atLanding = !window.location.hash || window.location.hash === "#/";
+  if (atLanding) {
+    render(parseRoute("#/"));
+  } else {
+    window.location.hash = "#/";
+  }
+}
+
 function parseRoute(hash) {
   const path = (hash || "#/").replace(/^#/, "");
   const parts = path.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "list" };
+  if (parts[0] === "industries") return { name: "industries" };
   if (parts[0] === "companies") {
     if (parts[1] === "new") return { name: "form", companyId: null };
     if (parts[1] && parts[2] === "edit")
@@ -87,10 +103,22 @@ function parseRoute(hash) {
   return { name: "list" };
 }
 
+function updateNav() {
+  const mainNav = document.getElementById("mainNav");
+  const toggler = document.getElementById("nav-toggler");
+  if (mainNav) mainNav.classList.toggle("d-none", !session);
+  if (toggler) toggler.classList.toggle("d-none", !session);
+}
+
 function render(route) {
+  if (!session) {
+    renderLogin(view);
+    return;
+  }
   showViewLoading();
   if (route.name === "profile") renderProfile(view, route.companyId);
   else if (route.name === "form") renderForm(view, route.companyId);
+  else if (route.name === "industries") renderIndustries(view);
   else renderList(view);
 }
 
@@ -98,5 +126,39 @@ export function navigate(hash) {
   window.location.hash = hash;
 }
 
-window.addEventListener("hashchange", () => render(parseRoute(location.hash)));
-render(parseRoute(location.hash));
+async function boot() {
+  try {
+    session = await me();
+  } catch (err) {
+    session = null;
+    if (err.status !== 401) {
+      showToast("Unable to verify session", "warning");
+    }
+  }
+
+  setOnUnauthorized(() => {
+    session = null;
+    updateNav();
+    render(parseRoute(location.hash));
+  });
+
+  const logoutBtn = document.getElementById("nav-logout");
+  if (logoutBtn) {
+    logoutBtn.addEventListener("click", async () => {
+      try {
+        await logout();
+      } catch {
+        /* ignore */
+      }
+      session = null;
+      updateNav();
+      render(parseRoute(location.hash));
+    });
+  }
+
+  window.addEventListener("hashchange", () => render(parseRoute(location.hash)));
+  updateNav();
+  render(parseRoute(location.hash));
+}
+
+boot();

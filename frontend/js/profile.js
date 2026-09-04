@@ -1,8 +1,20 @@
 import {
   getCompany,
+  listCountries,
   uploadArtifact,
   deleteArtifact,
   generateDocument,
+  uploadLogo,
+  deleteLogo,
+  createLocation,
+  updateLocation,
+  deleteLocation,
+  createReference,
+  updateReference,
+  deleteReference,
+  createNews,
+  updateNews,
+  deleteNews,
 } from "./api.js";
 import {
   esc,
@@ -12,6 +24,8 @@ import {
   formatDate,
   showToast,
 } from "./app.js";
+
+const LOCATION_TYPES = ["Headquarters", "Office", "Plant", "Other"];
 
 export async function renderProfile(container, companyId) {
   container.innerHTML = `
@@ -24,8 +38,12 @@ export async function renderProfile(container, companyId) {
 
   const body = container.querySelector("#profile-body");
   let company;
+  let countries;
   try {
-    company = await getCompany(companyId);
+    [company, countries] = await Promise.all([
+      getCompany(companyId),
+      listCountries(),
+    ]);
   } catch (err) {
     body.innerHTML = `
       <div class="alert alert-danger mx-auto" style="max-width: 480px;">
@@ -37,24 +55,8 @@ export async function renderProfile(container, companyId) {
   body.innerHTML = `
     <div class="row g-4">
       <div class="col-lg-7">
-        <div class="card mb-4">
-          <div class="card-body">
-            <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
-              <h2 class="h4 mb-0">${esc(company.name)}</h2>
-              ${completenessBadge(company)}
-            </div>
-            <dl class="row profile-dl mb-0">
-              ${detailRow("Industry", company.industry)}
-              ${detailRow("Headquarters", company.hq_location)}
-              ${detailRow("Website", websiteHtml(company.website))}
-              ${detailRow("Contact email", mailHtml(company.contact_email))}
-              ${detailRow("Contact phone", company.contact_phone)}
-              ${detailRow("Description", company.description)}
-            </dl>
-          </div>
-        </div>
-
-        <div class="d-flex gap-2 flex-wrap">
+        ${mainCard(company)}
+        <div class="d-flex gap-2 flex-wrap mb-4">
           <a href="#/companies/${company.id}/edit" class="btn btn-outline-secondary">
             <i class="bi bi-pencil me-1"></i>Edit
           </a>
@@ -62,69 +64,256 @@ export async function renderProfile(container, companyId) {
             <i class="bi bi-file-earmark-pdf me-1"></i>Generate summary
           </button>
         </div>
-        <div id="generate-feedback" class="mt-3"></div>
+        <div id="generate-feedback" class="mb-4"></div>
+        ${locationsCard(company, countries)}
       </div>
 
       <div class="col-lg-5">
-        <div class="card">
-          <div class="card-header d-flex justify-content-between align-items-center">
-            <span class="muted-label">Files &amp; artifacts</span>
-            <span class="badge text-bg-light border">${company.artifacts_count}</span>
-          </div>
-          <div class="card-body">
-            <form id="upload-form" class="d-flex gap-2 mb-3">
-              <input type="file" id="upload-file" class="form-control form-control-sm" required>
-              <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">
-                <i class="bi bi-upload me-1"></i>Upload
-              </button>
-            </form>
-            <div id="artifact-list" class="text-center text-secondary py-3">Loading…</div>
-          </div>
-        </div>
+        ${logoCard(company)}
+        ${filesCard(company)}
       </div>
+    </div>
+
+    <div class="row g-4">
+      <div class="col-lg-6">${referencesCard(company)}</div>
+      <div class="col-lg-6">${newsCard(company)}</div>
     </div>`;
 
-  const listEl = body.querySelector("#artifact-list");
-  renderArtifacts(container, listEl, company.artifacts, company.id);
+  wireLogo(container, body, company);
+  wireFiles(container, body, company);
+  wireLocations(container, body, company, countries);
+  wireReferences(container, body, company);
+  wireNews(container, body, company);
+  wireGenerate(body, company);
+}
 
-  body.querySelector("#upload-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const input = body.querySelector("#upload-file");
-    const file = input.files && input.files[0];
-    if (!file) return;
-    const btn = e.target.querySelector("button[type=submit]");
-    btn.disabled = true;
-    try {
-      await uploadArtifact(company.id, file);
-      showToast("File uploaded");
-      refreshProfile(container, company.id);
-    } catch (err) {
-      showToast(err.message, "danger");
-      btn.disabled = false;
-    }
-  });
+function mainCard(company) {
+  return `
+    <div class="card mb-4">
+      <div class="card-body">
+        <div class="d-flex flex-wrap justify-content-between align-items-start gap-2 mb-2">
+          <div class="d-flex align-items-center gap-3">
+            ${company.logo_url ? `<img src="${esc(company.logo_url)}" class="profile-logo-thumb" alt="">` : ""}
+            <h2 class="h4 mb-0">${esc(company.name)}</h2>
+          </div>
+          ${completenessBadge(company)}
+        </div>
+        <dl class="row profile-dl mb-0">
+          ${detailRow("Industry", company.industry ? esc(company.industry.name) : "")}
+          ${detailRow("Headquarters", esc(company.hq_location))}
+          ${detailRow("Website", websiteHtml(company.website))}
+          ${detailRow("Contact email", mailHtml(company.contact_email))}
+          ${detailRow("Contact phone", esc(company.contact_phone))}
+          ${detailRow("Description", esc(company.description))}
+        </dl>
+      </div>
+    </div>`;
+}
 
-  body.querySelector("#generate-btn").addEventListener("click", async () => {
-    const feedback = body.querySelector("#generate-feedback");
-    const btn = body.querySelector("#generate-btn");
-    btn.disabled = true;
-    feedback.innerHTML = "";
-    try {
-      const result = await generateDocument(company.id);
-      feedback.innerHTML = successAlert(result.message || "Document generated");
-      showToast("Document generated");
-      refreshProfile(container, company.id);
-    } catch (err) {
-      btn.disabled = false;
-      if (err.status === 422 && err.body && err.body.success === false) {
-        feedback.innerHTML = failureAlert(
-          err.body.message || "Not enough information to generate a document"
-        );
-      } else {
-        feedback.innerHTML = failureAlert(err.message);
-      }
-    }
-  });
+function logoCard(company) {
+  return `
+    <div class="card mb-4">
+      <div class="card-header">
+        <span class="muted-label">Logo</span>
+      </div>
+      <div class="card-body">
+        <div class="logo-box mb-3">
+          ${company.logo_url
+            ? `<img src="${esc(company.logo_url)}" class="profile-logo" alt="${esc(company.name)} logo">`
+            : `<span class="text-secondary">No logo set</span>`}
+        </div>
+        <form id="logo-form" class="d-flex gap-2">
+          <input type="file" id="logo-file" class="form-control form-control-sm" accept="image/*" required>
+          <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">
+            <i class="bi bi-upload me-1"></i>${company.logo_url ? "Replace" : "Upload"}
+          </button>
+        </form>
+        ${company.logo_url
+          ? `<button id="logo-remove" class="btn btn-sm btn-outline-danger mt-2 w-100">
+               <i class="bi bi-trash me-1"></i>Remove logo
+             </button>`
+          : ""}
+      </div>
+    </div>`;
+}
+
+function locationsCard(company, countries) {
+  const locs = company.locations || [];
+  const items =
+    locs.length === 0
+      ? `
+      <div class="text-center text-secondary py-3">
+        <i class="bi bi-geo-alt d-block fs-3 mb-2"></i>
+        No locations yet.
+      </div>`
+      : locs
+          .map(
+            (l) => `
+      <div class="d-flex justify-content-between align-items-center py-2 border-bottom">
+        <div>
+          <div class="fw-semibold">${esc(l.label)}</div>
+          <div class="stat-muted">
+            ${esc(l.city)}${l.address ? ` · ${esc(l.address)}` : ""} · ${esc(l.country_name ?? l.country_code)}
+            <span class="badge rounded-pill text-bg-light border ms-1">${esc(l.type)}</span>
+          </div>
+        </div>
+        <div class="d-flex gap-2 flex-shrink-0">
+          <button class="btn btn-sm btn-outline-secondary edit-location" data-id="${l.id}">
+            <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
+          </button>
+          <button class="btn btn-sm btn-outline-danger remove-location" data-id="${l.id}">
+            <i class="bi bi-trash"></i><span class="visually-hidden">Remove</span>
+          </button>
+        </div>
+      </div>`
+          )
+          .join("");
+  return `
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="muted-label">Locations</span>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="badge text-bg-light border">${locs.length}</span>
+          <button class="btn btn-sm btn-outline-primary" id="add-location-btn">
+            <i class="bi bi-plus-lg me-1"></i>Add location
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="location-list">${items}</div>
+        <div id="location-editor" class="d-none mt-3"></div>
+      </div>
+    </div>`;
+}
+
+function referencesCard(company) {
+  const refs = company.references || [];
+  const items =
+    refs.length === 0
+      ? `
+      <div class="text-center text-secondary py-3">
+        <i class="bi bi-link-45deg d-block fs-3 mb-2"></i>
+        No references yet.
+      </div>`
+      : refs
+          .map(
+            (r) => `
+      <div class="py-2 border-bottom">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <div class="fw-semibold">
+              <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a>
+            </div>
+            ${r.description ? `<div class="stat-muted">${esc(r.description)}</div>` : ""}
+            <div class="stat-muted small">
+              Added by ${esc(r.added_by)} · added ${esc(formatDate(r.created_at))}
+              ${r.updated_at !== r.created_at ? ` · updated ${esc(formatDate(r.updated_at))}` : ""}
+            </div>
+          </div>
+          <div class="d-flex gap-2 flex-shrink-0">
+            <button class="btn btn-sm btn-outline-secondary edit-reference" data-id="${r.id}">
+              <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
+            </button>
+            <button class="btn btn-sm btn-outline-danger remove-reference" data-id="${r.id}">
+              <i class="bi bi-trash"></i><span class="visually-hidden">Remove</span>
+            </button>
+          </div>
+        </div>
+      </div>`
+          )
+          .join("");
+  return `
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="muted-label">References</span>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="badge text-bg-light border">${refs.length}</span>
+          <button class="btn btn-sm btn-outline-primary" id="add-reference-btn">
+            <i class="bi bi-plus-lg me-1"></i>Add reference
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="reference-list">${items}</div>
+        <div id="reference-editor" class="d-none mt-3"></div>
+      </div>
+    </div>`;
+}
+
+function newsCard(company) {
+  const news = company.news || [];
+  const items =
+    news.length === 0
+      ? `
+      <div class="text-center text-secondary py-3">
+        <i class="bi bi-newspaper d-block fs-3 mb-2"></i>
+        No news articles yet.
+      </div>`
+      : news
+          .map(
+            (n) => `
+      <div class="py-2 border-bottom">
+        <div class="d-flex justify-content-between align-items-start gap-2">
+          <div>
+            <div class="fw-semibold">
+              <a href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.title)}</a>
+            </div>
+            <div class="stat-muted">${esc(n.source)} · ${esc(n.published_at)}</div>
+            ${n.summary ? `<div class="stat-muted">${esc(n.summary)}</div>` : ""}
+            <div class="mt-1">
+              ${n.is_scraped
+                ? `<span class="badge rounded-pill badge-scraped">Scraped</span>`
+                : `<span class="badge rounded-pill text-bg-light border">Not scraped</span>`}
+              <span class="stat-muted small ms-1">added ${esc(formatDate(n.created_at))}</span>
+            </div>
+          </div>
+          <div class="d-flex gap-2 flex-shrink-0">
+            <button class="btn btn-sm btn-outline-secondary edit-news" data-id="${n.id}">
+              <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
+            </button>
+            <button class="btn btn-sm btn-outline-danger remove-news" data-id="${n.id}">
+              <i class="bi bi-trash"></i><span class="visually-hidden">Remove</span>
+            </button>
+          </div>
+        </div>
+      </div>`
+          )
+          .join("");
+  return `
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="muted-label">News</span>
+        <div class="d-flex gap-2 align-items-center">
+          <span class="badge text-bg-light border">${news.length}</span>
+          <button class="btn btn-sm btn-outline-primary" id="add-news-btn">
+            <i class="bi bi-plus-lg me-1"></i>Add news
+          </button>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="news-list">${items}</div>
+        <div id="news-editor" class="d-none mt-3"></div>
+      </div>
+    </div>`;
+}
+
+function filesCard(company) {
+  return `
+    <div class="card">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="muted-label">Files &amp; artifacts</span>
+        <span class="badge text-bg-light border">${company.artifacts_count}</span>
+      </div>
+      <div class="card-body">
+        <form id="upload-form" class="d-flex gap-2 mb-3">
+          <input type="file" id="upload-file" class="form-control form-control-sm" required>
+          <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">
+            <i class="bi bi-upload me-1"></i>Upload
+          </button>
+        </form>
+        <div id="artifact-list" class="text-center text-secondary py-3">Loading…</div>
+      </div>
+    </div>`;
 }
 
 function detailRow(label, value) {
@@ -143,6 +332,409 @@ function websiteHtml(url) {
 function mailHtml(email) {
   if (!email) return "";
   return `<a href="mailto:${esc(email)}">${esc(email)}</a>`;
+}
+
+function locationEditorHtml(countries, loc = null) {
+  const countryOptions = [
+    `<option value="">Select country…</option>`,
+    ...countries.map(
+      (c) => `
+      <option value="${esc(c.code)}" ${loc && loc.country_code === c.code ? "selected" : ""}>
+        ${esc(c.name)}
+      </option>`
+    ),
+  ].join("");
+  const typeOptions = LOCATION_TYPES.map(
+    (t) => `<option value="${t}" ${loc && loc.type === t ? "selected" : ""}>${t}</option>`
+  ).join("");
+  return `
+    <form id="location-form" class="border-top pt-3">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="loc-label">Label</label>
+          <input id="loc-label" name="label" class="form-control form-control-sm"
+                 value="${loc ? esc(loc.label) : ""}" placeholder="e.g. Global HQ" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="loc-city">City</label>
+          <input id="loc-city" name="city" class="form-control form-control-sm"
+                 value="${loc ? esc(loc.city) : ""}" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="loc-country">Country</label>
+          <select id="loc-country" name="country" class="form-select form-select-sm" required>
+            ${countryOptions}
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="loc-type">Type</label>
+          <select id="loc-type" name="type" class="form-select form-select-sm">
+            ${typeOptions}
+          </select>
+        </div>
+        <div class="col-12">
+          <label class="form-label small mb-1" for="loc-address">
+            Address / region <span class="text-secondary">(optional)</span>
+          </label>
+          <input id="loc-address" name="address" class="form-control form-control-sm"
+                 value="${loc ? esc(loc.address ?? "") : ""}">
+        </div>
+      </div>
+      <div class="d-flex gap-2 mt-2">
+        <button type="submit" class="btn btn-sm btn-primary">
+          <i class="bi bi-check-lg me-1"></i>${loc ? "Save location" : "Add location"}
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary location-cancel">Cancel</button>
+      </div>
+      <div class="location-editor-error mt-2"></div>
+    </form>`;
+}
+
+function referenceEditorHtml(ref = null) {
+  return `
+    <form id="reference-form" class="border-top pt-3">
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="ref-title">Title</label>
+        <input id="ref-title" name="title" class="form-control form-control-sm"
+               value="${ref ? esc(ref.title) : ""}" required>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="ref-url">URL</label>
+        <input id="ref-url" name="url" type="url" class="form-control form-control-sm"
+               value="${ref ? esc(ref.url) : ""}" required>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="ref-description">
+          Description <span class="text-secondary">(optional)</span>
+        </label>
+        <textarea id="ref-description" name="description" class="form-control form-control-sm" rows="2">${
+          ref ? esc(ref.description ?? "") : ""
+        }</textarea>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-sm btn-primary">
+          <i class="bi bi-check-lg me-1"></i>${ref ? "Save reference" : "Add reference"}
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary reference-cancel">Cancel</button>
+      </div>
+      <div class="reference-editor-error mt-2"></div>
+    </form>`;
+}
+
+function newsEditorHtml(item = null) {
+  return `
+    <form id="news-form" class="border-top pt-3">
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="news-title">Title</label>
+        <input id="news-title" name="title" class="form-control form-control-sm"
+               value="${item ? esc(item.title) : ""}" required>
+      </div>
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="news-source">Source</label>
+          <input id="news-source" name="source" class="form-control form-control-sm"
+                 value="${item ? esc(item.source) : ""}" required>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label small mb-1" for="news-date">Publication date</label>
+          <input id="news-date" name="published_at" type="date" class="form-control form-control-sm"
+                 value="${item ? esc(item.published_at) : ""}" required>
+        </div>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="news-url">URL</label>
+        <input id="news-url" name="url" type="url" class="form-control form-control-sm"
+               value="${item ? esc(item.url) : ""}" required>
+      </div>
+      <div class="mb-2">
+        <label class="form-label small mb-1" for="news-summary">
+          Summary / snippet <span class="text-secondary">(optional)</span>
+        </label>
+        <textarea id="news-summary" name="summary" class="form-control form-control-sm" rows="2">${
+          item ? esc(item.summary ?? "") : ""
+        }</textarea>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-sm btn-primary">
+          <i class="bi bi-check-lg me-1"></i>${item ? "Save news" : "Add news"}
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary news-cancel">Cancel</button>
+      </div>
+      <div class="news-editor-error mt-2"></div>
+    </form>`;
+}
+
+function wireLogo(container, body, company) {
+  const form = body.querySelector("#logo-form");
+  if (form) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const input = body.querySelector("#logo-file");
+      const file = input.files && input.files[0];
+      if (!file) return;
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      try {
+        await uploadLogo(company.id, file);
+        showToast("Logo updated");
+        renderProfile(container, company.id);
+      } catch (err) {
+        showToast(err.message, "danger");
+        btn.disabled = false;
+      }
+    });
+  }
+  const remove = body.querySelector("#logo-remove");
+  if (remove) {
+    remove.addEventListener("click", async () => {
+      if (!window.confirm("Remove this logo?")) return;
+      try {
+        await deleteLogo(company.id);
+        showToast("Logo removed");
+        renderProfile(container, company.id);
+      } catch (err) {
+        showToast(err.message, "danger");
+      }
+    });
+  }
+}
+
+function wireFiles(container, body, company) {
+  const listEl = body.querySelector("#artifact-list");
+  renderArtifacts(container, listEl, company.artifacts, company.id);
+
+  body.querySelector("#upload-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = body.querySelector("#upload-file");
+    const file = input.files && input.files[0];
+    if (!file) return;
+    const btn = e.target.querySelector("button[type=submit]");
+    btn.disabled = true;
+    try {
+      await uploadArtifact(company.id, file);
+      showToast("File uploaded");
+      renderProfile(container, company.id);
+    } catch (err) {
+      showToast(err.message, "danger");
+      btn.disabled = false;
+    }
+  });
+}
+
+function wireLocations(container, body, company, countries) {
+  const editor = body.querySelector("#location-editor");
+  let editingId = null;
+
+  function openEditor(loc) {
+    editingId = loc ? loc.id : null;
+    editor.innerHTML = locationEditorHtml(countries, loc);
+    editor.classList.remove("d-none");
+    const form = editor.querySelector("#location-form");
+    const errEl = editor.querySelector(".location-editor-error");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errEl.innerHTML = "";
+      const payload = {
+        label: form.elements["label"].value.trim(),
+        address: form.elements["address"].value.trim() || null,
+        city: form.elements["city"].value.trim(),
+        country_code: form.elements["country"].value,
+        type: form.elements["type"].value,
+      };
+      if (!payload.label || !payload.city || !payload.country_code) return;
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      try {
+        if (editingId) {
+          await updateLocation(company.id, editingId, payload);
+          showToast("Location updated");
+        } else {
+          await createLocation(company.id, payload);
+          showToast("Location added");
+        }
+        renderProfile(container, company.id);
+      } catch (err) {
+        btn.disabled = false;
+        errEl.innerHTML = `<div class="alert alert-danger py-2 mb-0">${esc(err.message)}</div>`;
+      }
+    });
+    editor.querySelector(".location-cancel").addEventListener("click", closeEditor);
+  }
+
+  function closeEditor() {
+    editor.classList.add("d-none");
+    editor.innerHTML = "";
+  }
+
+  body.querySelector("#add-location-btn").addEventListener("click", () => openEditor(null));
+  body.querySelectorAll(".edit-location").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const loc = (company.locations || []).find((l) => l.id === Number(btn.dataset.id));
+      openEditor(loc);
+    });
+  });
+  body.querySelectorAll(".remove-location").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!window.confirm("Remove this location?")) return;
+      try {
+        await deleteLocation(company.id, Number(btn.dataset.id));
+        showToast("Location removed");
+        renderProfile(container, company.id);
+      } catch (err) {
+        showToast(err.message, "danger");
+      }
+    });
+  });
+}
+
+function wireReferences(container, body, company) {
+  const editor = body.querySelector("#reference-editor");
+  let editingId = null;
+
+  function openEditor(ref) {
+    editingId = ref ? ref.id : null;
+    editor.innerHTML = referenceEditorHtml(ref);
+    editor.classList.remove("d-none");
+    const form = editor.querySelector("#reference-form");
+    const errEl = editor.querySelector(".reference-editor-error");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errEl.innerHTML = "";
+      const payload = {
+        title: form.elements["title"].value.trim(),
+        url: form.elements["url"].value.trim(),
+        description: form.elements["description"].value.trim() || null,
+      };
+      if (!payload.title || !payload.url) return;
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      try {
+        if (editingId) {
+          await updateReference(company.id, editingId, payload);
+          showToast("Reference updated");
+        } else {
+          await createReference(company.id, payload);
+          showToast("Reference added");
+        }
+        renderProfile(container, company.id);
+      } catch (err) {
+        btn.disabled = false;
+        errEl.innerHTML = `<div class="alert alert-danger py-2 mb-0">${esc(err.message)}</div>`;
+      }
+    });
+    editor.querySelector(".reference-cancel").addEventListener("click", () => {
+      editor.classList.add("d-none");
+      editor.innerHTML = "";
+    });
+  }
+
+  body.querySelector("#add-reference-btn").addEventListener("click", () => openEditor(null));
+  body.querySelectorAll(".edit-reference").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const ref = (company.references || []).find((r) => r.id === Number(btn.dataset.id));
+      openEditor(ref);
+    });
+  });
+  body.querySelectorAll(".remove-reference").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!window.confirm("Remove this reference?")) return;
+      try {
+        await deleteReference(company.id, Number(btn.dataset.id));
+        showToast("Reference removed");
+        renderProfile(container, company.id);
+      } catch (err) {
+        showToast(err.message, "danger");
+      }
+    });
+  });
+}
+
+function wireNews(container, body, company) {
+  const editor = body.querySelector("#news-editor");
+  let editingId = null;
+
+  function openEditor(item) {
+    editingId = item ? item.id : null;
+    editor.innerHTML = newsEditorHtml(item);
+    editor.classList.remove("d-none");
+    const form = editor.querySelector("#news-form");
+    const errEl = editor.querySelector(".news-editor-error");
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      errEl.innerHTML = "";
+      const payload = {
+        title: form.elements["title"].value.trim(),
+        source: form.elements["source"].value.trim(),
+        url: form.elements["url"].value.trim(),
+        published_at: form.elements["published_at"].value,
+        summary: form.elements["summary"].value.trim() || null,
+      };
+      if (!payload.title || !payload.source || !payload.url || !payload.published_at) return;
+      const btn = form.querySelector("button[type=submit]");
+      btn.disabled = true;
+      try {
+        if (editingId) {
+          await updateNews(company.id, editingId, payload);
+          showToast("News updated");
+        } else {
+          await createNews(company.id, payload);
+          showToast("News added");
+        }
+        renderProfile(container, company.id);
+      } catch (err) {
+        btn.disabled = false;
+        errEl.innerHTML = `<div class="alert alert-danger py-2 mb-0">${esc(err.message)}</div>`;
+      }
+    });
+    editor.querySelector(".news-cancel").addEventListener("click", () => {
+      editor.classList.add("d-none");
+      editor.innerHTML = "";
+    });
+  }
+
+  body.querySelector("#add-news-btn").addEventListener("click", () => openEditor(null));
+  body.querySelectorAll(".edit-news").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const item = (company.news || []).find((n) => n.id === Number(btn.dataset.id));
+      openEditor(item);
+    });
+  });
+  body.querySelectorAll(".remove-news").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      if (!window.confirm("Remove this news article?")) return;
+      try {
+        await deleteNews(company.id, Number(btn.dataset.id));
+        showToast("News removed");
+        renderProfile(container, company.id);
+      } catch (err) {
+        showToast(err.message, "danger");
+      }
+    });
+  });
+}
+
+function wireGenerate(body, company) {
+  body.querySelector("#generate-btn").addEventListener("click", async () => {
+    const feedback = body.querySelector("#generate-feedback");
+    const btn = body.querySelector("#generate-btn");
+    btn.disabled = true;
+    feedback.innerHTML = "";
+    try {
+      const result = await generateDocument(company.id);
+      feedback.innerHTML = successAlert(result.message || "Document generated");
+      showToast("Document generated");
+      renderProfile(body.closest("#view"), company.id);
+    } catch (err) {
+      btn.disabled = false;
+      if (err.status === 422 && err.body && err.body.success === false) {
+        feedback.innerHTML = failureAlert(
+          err.body.message || "Not enough information to generate a document"
+        );
+      } else {
+        feedback.innerHTML = failureAlert(err.message);
+      }
+    }
+  });
 }
 
 function renderArtifacts(container, listEl, artifacts, companyId) {
@@ -204,8 +796,4 @@ function successAlert(message) {
 
 function failureAlert(message) {
   return `<div class="alert alert-warning py-2 mb-0"><i class="bi bi-exclamation-triangle me-2"></i>${esc(message)}</div>`;
-}
-
-function refreshProfile(container, companyId) {
-  renderProfile(container, companyId);
 }

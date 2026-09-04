@@ -62,3 +62,51 @@ dl.profile-dl dt {
 dl.profile-dl dd {
   margin-bottom: 0.75rem;
 }
+
+.company-logo-thumb {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+}
+
+.profile-logo-thumb {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+}
+
+.profile-logo {
+  max-height: 120px;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.logo-box {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 120px;
+  background: #fff;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+}
+
+.country-menu {
+  width: 300px;
+}
+
+.country-options {
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.badge-scraped {
+  background-color: #fdf3d7;
+  color: #8a6d1a;
+}
