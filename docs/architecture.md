@@ -1111,3 +1111,402 @@ bytes; regenerating after a logo change reflects the new logo.
    location and is never stored; locations live only in the `locations` table.
 7. **Manual dev-DB flush** (scope item u) is a documented operator action, not
    app startup behavior (§8.1.5).
+
+---
+
+## 9. Sprint 02 Enhancements — Architecture Additions
+
+This section extends the specification above (§1–§8) with the deltas required
+by the Sprint 02 scope (`enhancements/scope.md` items a–o; briefs
+`features/briefs/01-…-06-…`). It **supersedes** the hand-rolled authentication
+specified in §8 (the `sessions` table and its login/logout/me plumbing) with the
+maintained `fastapi-users` library, and moves persistence from the Sprint 01
+hand-managed SQL / stdlib `sqlite3` layer to async SQLAlchemy with versioned
+Alembic migrations. Everything in §1–§8 not explicitly superseded or modified
+here remains in force and is unchanged by this pass.
+
+**Stack (authoritative):** SQLAlchemy 2.0 (async, via `aiosqlite`),
+Alembic migrations, and fastapi-users with the **stock stateful
+`DatabaseStrategy`** + `CookieTransport` on Python 3.12. The `DatabaseStrategy`
+is stateful, not the stateless `JWTStrategy`: session tokens are persisted in an
+`access_tokens` database table keyed to the user, enforce a lifetime via
+`lifetime_seconds`, and logout deletes the token row — satisfying scope item **h**
+(server-side stored sessions, expiry, and immediate server-side revocation)
+without a custom session store.
+
+### 9.1 Data Model & Schema Changes
+
+All changes below are captured as versioned Alembic migrations. Per scope item
+**n**, the existing dev database under `data/` is **not** migrated; it is flushed
+once by Stage 6 to establish the migration baseline, after which schema changes
+are applied only as migrations (scope **b**). Repo-tracked content is not
+deleted or regressed.
+
+#### 9.1.1 `users` (modified)
+
+The Sprint 01 `users` table becomes the fastapi-users User model, keyed by an
+**integer** `id` (`IntegerPK`, not fastapi-users' default UUID), consistent with
+the rest of the app's integer PKs.
+
+| Column | Change |
+|--------|--------|
+| `id` | INTEGER `PRIMARY KEY AUTOINCREMENT` — unchanged, now the fastapi-users integer PK. |
+| `email` | TEXT `NOT NULL UNIQUE` — unchanged; email is normalized to lowercase by fastapi-users (sign-in is case-insensitive). |
+| `password_hash` | **Changed.** Now holds a `pwdlib`-generated hash (argon2/bcrypt) produced by fastapi-users, replacing the hand-rolled PBKDF2 string of §8.2.1. Column type stays TEXT `NOT NULL`. |
+| `is_active` | **Added.** INTEGER `NOT NULL DEFAULT 1` (bool). Controls whether the account can authenticate. |
+| `is_superuser` | **Added.** INTEGER `NOT NULL DEFAULT 0` (bool). The superuser flag authorizes account creation / admin functions (scope item **j**). |
+| `is_verified` | **Added.** INTEGER `NOT NULL DEFAULT 0` (bool). No email-verification flow exists this sprint; the bootstrap admin and admin-created accounts are created with `is_verified = 1`. |
+| `created_at` | TEXT `NOT NULL` — unchanged (fastapi-users keeps it; it is not exposed in the `me` payload). |
+
+- The bootstrap admin (`admin@localhost`) is created **idempotently** on
+  startup — only when it does not already exist. Its password comes from
+  `COMPANY_HUB_ADMIN_PASSWORD` if set, else a fresh complex password is
+  generated and printed once at creation. Thereafter the credential persists in
+  the database and is **not** re-randomized on later restarts (supersedes the
+  §8.1.2 per-startup regeneration). It is created with `is_superuser = 1`,
+  `is_verified = 1`, `is_active = 1`.
+
+#### 9.1.2 `access_tokens` (new) — replaces `sessions`
+
+FastAPI-users' stateful `DatabaseStrategy` persists each session token in an
+`access_tokens` table. This **replaces** the Sprint 01 `sessions` table, which is
+dropped.
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | INTEGER | `PRIMARY KEY AUTOINCREMENT` | stable identifier |
+| `token` | TEXT | `NOT NULL UNIQUE` | the server-side session token; the value referenced by the `session` cookie. |
+| `user_id` | INTEGER | `NOT NULL`, `FOREIGN KEY -> users.id`, `ON DELETE CASCADE` | owner |
+| `created_at` | TEXT | `NOT NULL` | ISO-8601 UTC |
+| `lifetime_seconds` | INTEGER | nullable | the session's remaining lifetime; when `NULL` the token does not expire. |
+
+- A session token is **persisted** (server-side) and keyed to its user; both
+  expiry (via `lifetime_seconds`) and revocation (deleting the row) are enforced
+  server-side.
+- **Sign-out** (`POST /api/auth/logout`) deletes the token row immediately —
+  server-side revocation that takes effect at once (scope **h**).
+- **Expiry:** a token older than its `lifetime_seconds` is treated as invalid;
+  the user is unauthenticated and must sign in again.
+- **Lifetime policy (fixed):** a **fixed absolute lifetime** (not sliding), so a
+  session is valid for exactly its configured duration and then expires. Default
+  is **7 days**. The duration is configurable via the environment variable
+  `COMPANY_HUB_SESSION_TTL` (integer seconds); the cookie `Max-Age` matches it.
+  On expiry the user is returned to the login screen and must sign in again.
+
+#### 9.1.3 `oauth_accounts` (new) — schema-only (scope item **k**)
+
+The account model gains the capacity to link a user to an external identity
+provider. **Schema only this sprint** — no OAuth login routes, provider screens,
+or SSO flows are added.
+
+| Column | Type | Constraints | Notes |
+|--------|------|-------------|-------|
+| `id` | INTEGER | `PRIMARY KEY AUTOINCREMENT` | stable identifier |
+| `user_id` | INTEGER | `NOT NULL`, `FOREIGN KEY -> users.id`, `ON DELETE CASCADE` | the linked local account |
+| `oauth_name` | TEXT | `NOT NULL` | provider name, e.g. `google`. |
+| `access_token` | TEXT | nullable | provider access token (reserved for future SSO use). |
+| `refresh_token` | TEXT | nullable | provider refresh token (reserved). |
+| `expires_at` | INTEGER | nullable | provider token expiry (epoch seconds, reserved). |
+| `account_id` | TEXT | `NOT NULL` | the provider's identifier for the account (e.g. Google `sub`). |
+| `account_email` | TEXT | nullable | email known to the provider. |
+
+- Uniqueness: a user may have **at most one link per provider** —
+  `UNIQUE(user_id, oauth_name)`; and an external identity maps to at most one
+  local account — `UNIQUE(oauth_name, account_id)`.
+- The columns beyond the link identity (`oauth_name`, `account_id`) are the
+  standard fastapi-users OAuth account shape, so a future Google-SSO sprint can
+  consume them without a data-model change (scope item **k**).
+- No rows are created this sprint; regular email/password accounts (§9.1.1) are
+  unaffected.
+
+#### 9.1.4 Unchanged data model
+
+The non-auth data model from Sprint 01 is preserved exactly (scope **c**):
+`companies`, `industries`, `countries`, `locations`, `references`,
+`news_articles`, and `artifacts` (including the `logo` source and the derived
+completeness rule of §8.1.4) are unchanged. `references.added_by` continues to
+record the signed-in user's email at creation — now sourced from the
+fastapi-users current user. Seed content and seeding rules are unchanged
+(scope **e**).
+
+### 9.2 API Contract Changes
+
+Base path and static-file serving are unchanged (§4). **All `/api/` routes
+remain gated by an authenticated session** (unchanged from §8.2), but the gate
+is now enforced by fastapi-users' `current_user` dependency backed by the
+`DatabaseStrategy`/`CookieTransport` (reads the `session` cookie → `access_tokens`
+→ `users`). An unauthenticated request to any protected `/api/` route returns
+`401 {"detail": "Not authenticated"}`. The login screen for unauthenticated
+users and the gated SPA are unchanged.
+
+The Sprint 01 hand-rolled auth contract (§8.2.1) is **superseded** by the
+fastapi-users routes below. The cookie name `session` is preserved (Sprint 01
+continuity), configured on `CookieTransport`:
+`cookie_name="session"`, `cookie_httponly=True`, `cookie_samesite="lax"`,
+`cookie_secure=False` (dev is plain http on localhost), `cookie_path="/"`,
+`cookie_max_age` = the session lifetime (default 7 days).
+
+#### 9.2.1 Authentication (`/api/auth`)
+
+fastapi-users routers are mounted under the `/api/auth` prefix.
+
+##### `POST /api/auth/login`
+
+Public. Request body (fastapi-users login form / JSON):
+
+```json
+{ "email": "admin@localhost", "password": "<admin password>" }
+```
+
+- `200` — on success: `{ "access_token": "<token>", "token_type": "bearer" }`
+  and the `session` cookie is set. A new `access_tokens` row is created and
+  persisted server-side.
+- `400` — invalid credentials: `{ "detail": "LOGIN_BAD_CREDENTIALS" }` (unknown
+  email, wrong password, or inactive/disabled account).
+
+##### `POST /api/auth/logout`
+
+- `204` — deletes the current session's `access_tokens` row (immediate
+  server-side revocation) and clears the `session` cookie. Idempotent: a missing
+  session still returns `204`.
+
+##### `GET /api/auth/me`
+
+- `200` — the current session user, serialized to the contracted shape:
+
+```json
+{ "id": 1, "email": "admin@localhost", "is_superuser": true }
+```
+
+- `401` — no valid session.
+
+##### `PATCH /api/auth/me`
+
+fastapi-users' self-service profile update. In scope, the only field a user may
+self-update is their **own password** (see `change-password` below); other
+profile fields are out of scope this sprint. `PATCH /api/auth/me` is declared
+available for compatibility but is **not** used by the SPA this sprint.
+
+##### `POST /api/auth/change-password` (new)
+
+Self-service password change for the signed-in user (scope item **f**, brief 03).
+
+Request body:
+
+```json
+{ "old_password": "<current>", "new_password": "<new>" }
+```
+
+- `200` — `{ "status": "ok" }` — the user's password is updated through the
+  fastapi-users `UserManager` (re-hashed with pwdlib). After the change the new
+  password signs in and the old one no longer does.
+- `400` — wrong `old_password`: `{ "detail": "INVALID_PASSWORD" }`.
+- `422` — missing/empty fields or invalid `new_password` (too short / malformed).
+- `401` — no valid session.
+
+Existing session tokens remain valid until expiry; there is no force re-login on
+self password change. **Superuser resetting another user's password is out of
+scope** (brief 03).
+
+##### `POST /api/auth/users` (new — admin account creation)
+
+Superuser-only account creation (scope item **j**, brief 05). There is **no
+self-service signup**; the fastapi-users register router is **not** mounted.
+
+Request body:
+
+```json
+{ "email": "alice@example.com", "password": "<initial password>", "is_superuser": false }
+```
+
+- `201` — the created user: `{ "id": 2, "email": "alice@example.com", "is_superuser": false }`.
+- `400` — email already registered: `{ "detail": "REGISTER_USER_ALREADY_EXISTS" }`.
+- `422` — missing/invalid email or password.
+- `401` — no valid session.
+- `403` — authenticated but not a superuser: `{ "detail": "Not enough permissions" }`.
+
+Created accounts get `is_active = 1`, `is_verified = 1`, and the requested
+`is_superuser` (default `false`). Non-superusers have no admin functions and
+cannot create accounts. **No SPA admin UI for account creation this sprint**
+(brief 05); creation is via the API only.
+
+#### 9.2.2 Other `/api` routes
+
+- **Non-auth routes are unchanged** (scope **c**, **l**): companies, industries,
+  countries, locations, references, news, artifacts, logos, and document
+  generation keep their exact §8.2 contracts, request/response shapes, and
+  status codes. They now read/write through the async SQLAlchemy data layer
+  instead of hand-written SQL; responses are byte-for-byte the same.
+- **`references.added_by`** is populated from the authenticated session user's
+  email (fastapi-users current user), supporting multiple user accounts.
+
+### 9.3 Project / File Structure Additions
+
+New/changed files beyond the §1 and §8.3 trees:
+
+```
+backend/
+├── models/                      # SQLAlchemy ORM models (new)
+│   ├── __init__.py              #   re-exports all models for metadata
+│   ├── user.py                  #   User (fastapi-users IntegerPK + is_* flags)
+│   ├── access_token.py          #   AccessToken (DatabaseStrategy store)
+│   ├── oauth_account.py         #   OAuthAccount (schema-only, brief 06)
+│   ├── company.py               #   Company + locations/references/news_articles
+│   ├── industry.py              #   Industry
+│   ├── country.py               #   Country
+│   ├── artifact.py              #   Artifact (incl. logo source)
+│   └── reference.py / news_article.py
+├── db/
+│   ├── engine.py                # async engine + session factory (aiosqlite) (new)
+│   ├── session.py               #   get_session dependency (new)
+│   ├── base.py                  #   DeclarativeBase (new)
+│   └── seed.py                  # seed-on-empty (re-homed from backend/data/seed.py)
+├── auth/
+│   ├── __init__.py
+│   ├── db.py                    # get_user_db / get_access_token_db (new)
+│   ├── strategies.py            # DatabaseStrategy + CookieTransport config (new)
+│   ├── managers.py              # UserManager (password change, admin create) (new)
+│   ├── schemas.py               # UserRead/UserUpdate/user-create serializers (new)
+│   └── routers.py               # auth/users router assembly + change-password (new)
+├── routers/
+│   ├── auth.py                  # superseded by backend/auth/routers.py (removed/changed)
+│   └── ...                      # existing routers unchanged in contract, now ORM-backed
+├── app.py                       # wire-up: DB session, auth backend, migrations, seed
+├── db.py                        # superseded by backend/db/ (removed)
+├── models.py / schemas.py       # superseded / re-homed (removed)
+├── data/seed.py                 # re-homed to backend/db/seed.py
+└── alembic/
+    ├── alembic.ini              # Alembic config (new)
+    ├── env.py                   # async engine wiring (new)
+    └── versions/                # versioned migrations; baseline = Sprint 01 schema (new)
+frontend/
+└── js/
+    ├── api.js                   # auth endpoints re-pointed (login/me/logout unchanged paths)
+    ├── login.js                 # sign-in/sign-out (paths unchanged)
+    ├── password.js              # self-service change-password form (new)
+    └── app.js                   # boot gate via GET /api/auth/me (unchanged behavior)
+```
+
+### 9.4 Module Boundary Changes
+
+| Module | Change |
+|--------|--------|
+| `backend/models/*` | Own the SQLAlchemy ORM models and relationship metadata. Replaces the §1/§8 row-helper approach. |
+| `backend/db/engine.py` | Owns the async engine (aiosqlite) and session factory. No request logic. |
+| `backend/db/session.py` | Provides the per-request async session dependency. |
+| `backend/auth/*` | Owns fastapi-users wiring: user/access-token DB adapters, `DatabaseStrategy` + `CookieTransport`, `UserManager`, serializers, and the auth/users/change-password routers. |
+| `backend/routers/*` | Unchanged responsibilities and contracts; now call the ORM data layer instead of raw SQL. Routers still do no raw SQL and no file-bytes handling. |
+| `backend/services/storage.py`, `pdf.py` | Unchanged (§2). |
+| `backend/alembic/` | Owns versioned schema migrations; the Sprint 01 schema is the initial baseline revision. |
+| `frontend/*` | Sign-in/sign-out/me flows re-point to the fastapi-users paths (same `/api/auth/*` paths); a new self-service change-password view is added. No other UI changes. |
+
+Ownership rules from §2 (routers do no raw SQL/file-bytes handling; storage owns
+bytes; schemas own the contract) are unchanged.
+
+### 9.5 Backend / Frontend Responsibility Changes
+
+**Backend (new):** replace hand-rolled auth with fastapi-users (`DatabaseStrategy`
++ `CookieTransport`), the stateful `access_tokens` session store, the `User` model
+with `is_active`/`is_superuser`/`is_verified`, idempotent stable-admin bootstrap,
+superuser-only `POST /api/auth/users`, and self-service `POST /api/auth/change-password`.
+Move all persistence to async SQLAlchemy models and a per-request async session;
+introduce Alembic with the Sprint 01 schema as the initial migration baseline;
+perform the one-time dev-DB flush (scope **n**); add the `oauth_accounts` table
+(schema-only). Non-auth behavior and API contracts are unchanged.
+
+**Frontend (new):** continue to boot by calling `GET /api/auth/me` (paths
+unchanged); treat a `401` from any API call as a return to the login view; add a
+small self-service change-password form for the signed-in user. Sign-in/sign-out
+re-point to the same `/api/auth/login` and `/api/auth/logout` paths. No SPA admin
+UI for account creation this sprint. All other views and behaviors are unchanged.
+The SPA remains a pure API client with no authoritative client-side state.
+
+### 9.6 Component Interactions & State Flow
+
+```
+Browser (SPA)
+   │  boot → GET /api/auth/me  (session cookie)
+   │    401 ────────────────► login view
+   │    200 ─► main views (all data via authenticated /api calls)
+   │  any /api call → 401  ─► return to login view
+   │  POST /api/auth/change-password ──► self-service password update
+   ▼
+FastAPI
+   ├─ fastapi-users auth backend (DatabaseStrategy + CookieTransport)
+   │     session cookie → access_tokens → users (else 401)
+   │     login: verify via UserManager → create access_tokens row → set cookie
+   │     logout: delete access_tokens row → clear cookie
+   │     change-password: UserManager re-hash (pwdlib)
+   │     admin create: superuser-gated UserManager.create
+   ├─ routers (companies / industries / reference / locations / references / news
+   │            / artifacts(+logo) / documents) ── async SQLAlchemy session
+   ├─ services/pdf.py (fpdf2) ──► bytes (+ logo bytes when set) → storage
+   ├─ services/storage.py ──► data/artifacts/<company_id>/...
+   └─ db/engine.py (SQLAlchemy async + aiosqlite) ──► data/company_hub.db
+      (schema applied via Alembic migrations)
+```
+
+**State flow additions:** the SPA holds no session state itself; on boot it asks
+`/api/auth/me` and renders the login view or the app accordingly. A session is
+active for its fixed lifetime (default 7 days, `COMPANY_HUB_SESSION_TTL` to
+override) and then expires, returning the user to the login view. Sign-out
+deletes the server-side token immediately. A superuser can create accounts via
+`POST /api/auth/users`; the new account can sign in with its own credentials.
+After a self password change the new password authenticates and the old one no
+longer does. Non-auth state flows from §8.6 (industry/country label resolution,
+country filter, locations/references/news sub-resources, logo, PDF regeneration)
+are unchanged.
+
+### 9.7 Explicitly Unchanged / Out of Scope
+
+- All non-auth behavior and API contracts are unchanged (scope **c**, **l**):
+  companies, industries, countries, locations, references, news, artifacts
+  (incl. logos), document generation, completeness rule, and seed content/rules.
+- The cookie-based sign-in experience is preserved: HttpOnly `session` cookie, a
+  login screen for unauthenticated users, all application routes gated by an
+  authenticated session (scope **g**).
+- No self-service signup (register router not mounted); accounts are
+  superuser-created (scope **j**). No SPA admin UI for account creation this
+  sprint (brief 05). No superuser password reset of others.
+- No OAuth login routes, provider screens, or SSO flows; `oauth_accounts` is
+  schema-only (scope **k**, brief 06).
+- No email-verification flow; created accounts are `is_verified = 1`.
+- Entry point `backend.app:app`, `run.sh`, Python 3.12, dependency set, and the
+  `data/` storage layout are unchanged (Stage 4: environment additions only,
+  no removals). Object storage stays file-bytes-on-disk + metadata-in-DB.
+- The one-time dev-DB flush (scope **n**) is a documented operator action Stage 6
+  performs to establish the migration baseline, not app startup behavior.
+
+### 9.8 Open Design Decisions / Contract Notes (Sprint 02)
+
+1. **Stateful `DatabaseStrategy` (resolved):** tokens are persisted in
+   `access_tokens` keyed to the user; expiry via `lifetime_seconds`; logout
+   deletes the token row (immediate server-side revocation). This is NOT the
+   stateless `JWTStrategy`. Satisfies scope **h** without a custom session store.
+2. **Session lifetime:** fixed absolute lifetime (not sliding), default **7 days**
+   (604800 s), overridable via `COMPANY_HUB_SESSION_TTL` (integer seconds).
+   `cookie_max_age` matches. Re-login on expiry.
+3. **Cookie name** preserved as `session` (Sprint 01 continuity), configured on
+   `CookieTransport` (`HttpOnly`, `SameSite=Lax`, not `Secure` on dev http).
+4. **Integer user id** (`IntegerPK`), not fastapi-users' default UUID, to stay
+   consistent with the app's integer PKs.
+5. **`users` schema:** adds `is_active`/`is_superuser`/`is_verified`;
+   `password_hash` now uses pwdlib (argon2/bcrypt). Admin and admin-created
+   accounts are `is_verified = 1`.
+6. **Stable admin bootstrap:** idempotent (create only if absent), password from
+   `COMPANY_HUB_ADMIN_PASSWORD` or generated+printed once; credential persists
+   and is never re-randomized. Supersedes the §8 per-startup regeneration.
+7. **`me` payload:** `{ id, email, is_superuser }` (no verification/active flags
+   surfaced, no non-auth fields).
+8. **Self password change:** `POST /api/auth/change-password`
+   (`{ old_password, new_password }`) through the `UserManager`; old password
+   verified, new one re-hashed. Existing tokens stay valid until expiry.
+9. **Admin account creation:** superuser-only `POST /api/auth/users`; register
+   router not mounted; no self-service signup.
+10. **`oauth_accounts` (schema-only):** `UNIQUE(user_id, oauth_name)` and
+    `UNIQUE(oauth_name, account_id)`; Google-oriented; no rows written this
+    sprint and no OAuth routes.
+11. **Alembic baseline:** the Sprint 01 schema is the initial migration revision;
+    the dev DB under `data/` is flushed once (scope **n**) by Stage 6 before the
+    first run of the new build. After that, changes are versioned migrations
+    only (scope **b**).
