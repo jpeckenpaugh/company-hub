@@ -20,17 +20,26 @@
 
 ## Dependencies and their role
 
-| Package             | Role                                                              |
-|---------------------|-------------------------------------------------------------------|
-| `fastapi`           | Web/API framework for the backend                                 |
-| `uvicorn`           | ASGI server used to run the app                                   |
-| `python-multipart`  | Required by FastAPI for multipart file uploads (Brief 04)         |
-| `fpdf2`             | Simple, clean PDF generation for derived documents (Brief 05)     |
+| Package                        | Role                                                                    |
+|--------------------------------|-------------------------------------------------------------------------|
+| `fastapi`                      | Web/API framework for the backend                                       |
+| `uvicorn`                      | ASGI server used to run the app                                         |
+| `python-multipart`             | Required by FastAPI for multipart file uploads (Brief 04)               |
+| `fpdf2`                        | Simple, clean PDF generation for derived documents (Brief 05)           |
+| `sqlalchemy[asyncio]`          | Maintained ORM (Sprint 02, scope **a**); async-native persistence       |
+| `alembic`                      | Versioned schema migrations (Sprint 02, scope **b**)                    |
+| `aiosqlite`                    | Async SQLite driver backing async SQLAlchemy (scope **d**)              |
+| `fastapi-users[sqlalchemy]`    | Maintained auth library (Sprint 02, scope **f**); `[sqlalchemy]` extra only, no `[oauth]` this sprint |
+| `fastapi-users-db-sqlalchemy`  | SQLAlchemy adapter pulled by the `fastapi-users[sqlalchemy]` extra      |
+| `pwdlib[argon2,bcrypt]`        | Password hashing backend used by fastapi-users (replaces hand-rolled PBKDF2) |
+| `email-validator`              | Required by fastapi-users for email validation                         |
+| `makefun`                      | Required by fastapi-users (route generation)                           |
+| `pyjwt[crypto]`                | Required by fastapi-users (JWT signing)                                |
 
 ## Storage
 
-- **Database:** SQLite via the Python standard library — no external database
-  server or driver dependency.
+- **Database:** SQLite, now accessed through async SQLAlchemy via `aiosqlite`
+  (Sprint 02). No external database server or driver beyond `aiosqlite`.
 - **Object storage:** local filesystem. The local database and stored
   file/artifact objects live under `data/` (or wherever the Architect places
   them). `data/` is gitignored; nothing runtime-written should be committed.
@@ -99,3 +108,21 @@ rm -f data/company_hub.db && rm -rf data/artifacts
 The app seeds only when the `companies` table is empty and never destroys data
 on a normal restart. `data/` is gitignored, so no repository history is
 affected.
+
+## Sprint 02 — migration baseline flush (Stage 6 note)
+
+Sprint 02 rebuilds persistence on SQLAlchemy (async) with versioned Alembic
+migrations, and replaces the auth model with fastapi-users (new users/sessions
+tables and an OAuth-accounts table per scope item **k**). Per scope item **n**,
+the v0.1 SQLite database is **not** migrated; it may be flushed once to
+establish the migration baseline. Mirroring the Sprint 01 flush (performed by
+Stage 6), flush the gitignored dev runtime state once before the first run of
+the new build:
+
+```
+rm -f data/company_hub.db && rm -rf data/artifacts
+```
+
+After this baseline, schema changes are applied as versioned migrations, not
+destroy-and-reseed (scope **b**). `data/` is gitignored, so no repository
+history is affected.

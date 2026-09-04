@@ -3,3 +3,17 @@ fastapi==0.141.1
 uvicorn==0.52.4
 python-multipart==0.0.32
 fpdf2==2.8.8
+
+# Persistence / migration foundation (Sprint 02)
+sqlalchemy[asyncio]==2.0.52
+alembic==1.19.2
+aiosqlite==0.22.1
+
+# Maintained auth — fastapi-users [sqlalchemy] extra only; no [oauth] this sprint.
+# Transitives pinned for reproducibility.
+fastapi-users[sqlalchemy]==15.0.5
+fastapi-users-db-sqlalchemy==7.0.0
+pwdlib[argon2,bcrypt]==0.3.0
+email-validator==2.3.0
+makefun==1.16.0
+pyjwt[crypto]==2.13.0
