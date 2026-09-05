@@ -16,11 +16,15 @@ make that document available from the profile.
 ## Stack
 
 - **Backend:** [FastAPI](https://fastapi.tiangolo.com/) with [SQLite](https://www.sqlite.org/)
-  (via the Python standard library) — serves the REST API and the frontend.
+  persisted through **async [SQLAlchemy](https://www.sqlalchemy.org/) 2.0**
+  (`aiosqlite`) with versioned **[Alembic](https://alembic.sqlalchemy.org/)**
+  migrations — serves the REST API and the frontend.
 - **Frontend:** a static, client-side [Bootstrap](https://getbootstrap.com/) SPA
   (no build step) served by the FastAPI app at `/`.
-- **Authentication:** email/password login with PBKDF2-HMAC-SHA256 password
-  hashing and database-backed, HttpOnly `session` cookies.
+- **Authentication:** the maintained [fastapi-users](https://fastapi-users.github.io/)
+  library — email/password login with the stateful `DatabaseStrategy` (server-side
+  session tokens with a defined lifetime) and an HttpOnly `session` cookie
+  (`CookieTransport`).
 - **Object storage:** local filesystem under `data/artifacts/` — file bytes are
   kept on disk; the database stores artifact metadata only.
 - **Document generation:** [fpdf2](https://py-pdf.github.io/fpdf2/) for the
@@ -70,6 +74,34 @@ Sprint 01 added:
 Company completeness was redefined in Sprint 01: name + industry + the four
 contact/description fields (locations and logos do not count).
 
+Sprint 02 added:
+
+- **Async ORM persistence** — the database layer was rebuilt on async
+  SQLAlchemy 2.0 (`aiosqlite`); application code reads and writes through ORM
+  models rather than hand-managed SQL. All existing non-auth API contracts and
+  behaviors are unchanged.
+- **Versioned schema migrations** — the schema is applied through Alembic
+  versioned migrations (the Sprint 01 schema is the baseline; a Sprint 02
+  revision adds the auth/schema deltas). Fresh databases reach the current
+  schema by replaying the migration set in order.
+- **Maintained authentication** — the hand-rolled Sprint 01 auth was replaced by
+  fastapi-users. Sign-in/sign-out and the current-user endpoint use the same
+  cookie-based experience as before, but login now returns `{access_token,
+  token_type}` and `me` returns `{id, email, is_superuser}`.
+- **Stable bootstrap admin** — the `admin@localhost` account now has a stable,
+  persisted credential (created once, **not** re-randomized on every restart).
+- **Self-service change-password** — a user can change their own password from a
+  new `#/password` UI view (`POST /api/auth/change-password`).
+- **Multiple user accounts** — additional accounts are created by a superuser
+  through `POST /api/auth/users`; there is no self-service signup.
+- **Defined session lifetime** — sessions have a fixed server-side lifetime
+  (default 7 days, `COMPANY_HUB_SESSION_TTL` to override) enforced by the
+  fastapi-users stateful `DatabaseStrategy`, with immediate server-side
+  revocation on sign-out.
+- **OAuth-ready account model (schema-only)** — an `oauth_accounts` table exists
+  (Google-oriented) so external-identity-provider login can be added in a later
+  sprint without a data-model change; no OAuth login routes exist yet.
+
 ## Requirements
 
 - A Python 3.11+ interpreter named `python3.12` or `python3.11` on `PATH`
@@ -94,10 +126,13 @@ the pinned dependencies from `requirements.txt`.
 `run.sh` starts the app with `uvicorn backend.app:app` on
 `http://127.0.0.1:8000`. Open that URL in a browser.
 
-**Login is required.** On startup the backend creates the bootstrap admin
+**Login is required.** On first startup the backend creates the bootstrap admin
 `admin@localhost` with a fresh, complex auto-generated password that is
 **printed to the console**. Sign in with `admin@localhost` and that printed
-password. The whole application (all `/api` routes) requires an authenticated
+password. The password is created once and **persisted** — it is **not**
+re-randomized on subsequent restarts (the `COMPANY_HUB_ADMIN_PASSWORD`
+environment override, used by the test suites, sets it deterministically
+instead). The whole application (all `/api` routes) requires an authenticated
 session, so you will be asked to log in on first use.
 
 On first start the backend creates the SQLite database under `data/` and seeds
@@ -134,7 +169,10 @@ locations) is created on the next start (seeding never runs on a non-empty
 ```
 
 `flush.sh` removes `data/company_hub.db` and `data/artifacts`; the next
-`./run.sh` seeds a fresh database from scratch.
+`./run.sh` seeds a fresh database from scratch. **Sprint 02** established the
+Alembic migration baseline with a one-time flush of the dev state (scope item
+n); from then on the current schema is reached by replaying the migration set in
+order, and seeding still runs only on an empty `companies` table.
 
 ## API
 
@@ -142,8 +180,15 @@ The REST API lives under `/api`. Every route requires an authenticated session
 except `POST /api/auth/login` (unauthenticated `/api` calls return `401`). It
 includes:
 
-- `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout` — session
-  management
+- `POST /api/auth/login` — sign in with `{email, password}`; returns
+  `200 {access_token, token_type:"bearer"}` plus an HttpOnly `session` cookie
+- `GET /api/auth/me` — the current user `{id, email, is_superuser}`
+- `POST /api/auth/logout` — sign out; revokes the session server-side (idempotent
+  `204`)
+- `POST /api/auth/change-password` — change the current user's own password
+  (`{old_password, new_password}`, new password ≥ 8 chars)
+- `POST /api/auth/users` — **superuser-only** account creation; no self-service
+  signup route
 - `GET /api/companies` — list (with optional `?q=` name search and `?countries=`
   multi-country filter)
 - `POST /api/companies` — create a company
@@ -172,8 +217,9 @@ Interactive API docs are available at `/docs` (OpenAPI).
 ## Implementation summary
 
 The backend (`backend/`) is a FastAPI application assembled in `backend/app.py`,
-with SQLite persistence (`backend/db.py`), row-to-JSON models
-(`backend/models.py`), Pydantic request schemas (`backend/schemas.py`), and
+with async SQLAlchemy persistence (`backend/db/` — engine, per-request session,
+and seed), ORM models (`backend/models/`), Pydantic request schemas
+(`backend/schemas.py`), row-to-JSON serializers (`backend/serializers.py`), and
 routers for companies, artifacts, and document generation. A local-filesystem
 object-storage service (`backend/services/storage.py`) stores bytes under
 `data/artifacts/<company_id>/`, and a one-page PDF service
@@ -181,12 +227,13 @@ object-storage service (`backend/services/storage.py`) stores bytes under
 artifact metadata only; file bytes live on disk.
 
 The frontend (`frontend/`) is a static Bootstrap SPA — an `index.html` shell, a
-custom stylesheet, and five ES-module JavaScript files (`app.js`, `api.js`,
-`list.js`, `profile.js`, `form.js`) implementing hash-based routing, the list,
-profile, add/edit, artifact, and generate views. Bootstrap and Bootstrap Icons
-are vendored locally, so the app has no runtime network/CDN dependency. It is a
-strict API client with no client-side persistence: every view re-fetches from
-the backend, so the UI always reflects current state.
+custom stylesheet, and eight ES-module JavaScript files (`app.js`, `api.js`,
+`list.js`, `profile.js`, `form.js`, `login.js`, `industries.js`, `password.js`)
+implementing hash-based routing, the list, profile, add/edit, artifact,
+generate, login, industry-management, and change-password views. Bootstrap and
+Bootstrap Icons are vendored locally, so the app has no runtime network/CDN
+dependency. It is a strict API client with no client-side persistence: every
+view re-fetches from the backend, so the UI always reflects current state.
 
 **Sprint 01** extended both sides. The backend gained auth (`backend/routers/auth.py`:
 PBKDF2 hashing, DB-backed HttpOnly session cookie, `login`/`me`/`logout`, every
@@ -208,6 +255,23 @@ seeded company now also carries one or two further real locations, two curated
 references (Wikipedia + official about page, `added_by = admin@localhost`),
 several genuine recent news articles (`is_scraped = 0`), and a committed raster
 logo (`backend/data/logos/`) copied into artifact storage at seed time.
+
+**Sprint 02** rebuilt the persistence layer on async SQLAlchemy 2.0 and replaced
+the hand-rolled auth with fastapi-users. The backend now has a config module
+(`backend/config.py`), an ORM model set (`backend/models/`, incl. `user`,
+`access_token`, and the schema-only `oauth_account`), an async DB layer
+(`backend/db/` — engine, per-request session, and seed), an auth package
+(`backend/auth/` — DB adapters, `DatabaseStrategy` + `CookieTransport`, user
+manager with the idempotent bootstrap-admin, and a custom auth-router assembly
+for the JSON-login / idempotent-logout / `{id, email, is_superuser}`-`me`
+contract), and a serializer layer (`backend/serializers.py`). Versioned Alembic
+migrations (`backend/alembic/` — Sprint 01 schema baseline + a Sprint 02 auth
+revision) run to `head` on startup. Routers are now async ORM calls; file I/O
+and PDF generation run via `asyncio.to_thread` so they stay off the request
+loop. The hand-rolled `backend/routers/auth.py` and `backend/db.py` were
+removed (superseded). The frontend gained a `password.js` view and a `#/password`
+route (self-service change-password) and re-fetches the current user via `me`
+after login, since the login response is now `{access_token, token_type}`.
 
 ## Testing
 
@@ -333,8 +397,28 @@ Remaining items:
 - **Admin-password test override is a documented seam.** The
   `COMPANY_HUB_ADMIN_PASSWORD` env override (used by the test suites) and
   `COMPANY_HUB_DB` are documented in `environment-notes.md`; the app's documented
-  runtime path is the console-printed admin password. Documenting the override
-  seam in `docs/architecture.md` is a candidate future pass.
+  runtime path is the console-printed admin password, now created once and
+  persisted (not re-randomized per restart). Documenting the override seam in
+  `docs/architecture.md` is a candidate future pass.
+
+**Sprint 02 additions:**
+
+- **Fastapi-users contract deviations.** Login uses a JSON body
+  (`{email, password}`) and returns `200 {access_token, token_type}` rather than
+  the stock form-encoded flow; logout returns `204` even with no session
+  (idempotent); `me` returns `{id, email, is_superuser}`. These are documented,
+  deliberate deviations recorded by the Backend Engineer and verified as
+  delivered.
+- **`PATCH /api/auth/me` is declared but unused.** It is exposed for
+  fastapi-users compatibility (password-only self-service); the SPA uses the
+  dedicated `POST /api/auth/change-password` route instead, and no other profile
+  fields are self-editable this sprint.
+- **`oauth_accounts` is schema-only.** The OAuth-ready account table exists with
+  zero rows and no OAuth login routes/SSO behavior; Google SSO is a future
+  sprint.
+- **Stable admin credential.** The bootstrap admin password is now created once
+  and persisted across restarts (not re-randomized per startup as in Sprint 01);
+  it is only re-generated if the admin account is deleted.
 
 ## Recommended next actions
 
@@ -352,6 +436,18 @@ Remaining items:
 - **Document the admin-password seam in `docs/architecture.md`.** Record the
   `COMPANY_HUB_ADMIN_PASSWORD` test override alongside the documented
   printed-password flow.
+
+Sprint 02 / future:
+
+- **Google-SSO login.** The `oauth_accounts` schema is in place (Google-oriented)
+  with no OAuth routes yet; a later sprint can mount fastapi-users SSO with no
+  data-model change.
+- **Superuser admin UI.** Account creation exists via the superuser-only
+  `POST /api/auth/users` API but there is no SPA admin view; a future pass could
+  add a minimal user-management screen.
+- **Document the `PATCH /api/auth/me` seam.** The route is implemented (password
+  only) but unused by the SPA; record its availability/limits in
+  `docs/architecture.md` for future use.
 
 Completed since v0.1 (no longer open): **browser-automation verification** (now
 a persistent CDP suite), **authentication** (added in Sprint 01, rebuilt on
