@@ -45,6 +45,10 @@ test("nav visible when authenticated", async () => {
   );
 });
 
+test("change password nav present when authenticated", async () => {
+  assert.ok(await cdp.waitFor(`!!document.getElementById('nav-password')`));
+});
+
 test("seeded companies rendered", async () => {
   assert.ok(
     await cdp.waitFor(

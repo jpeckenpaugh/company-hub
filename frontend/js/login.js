@@ -1,4 +1,4 @@
-import { login } from "./api.js";
+import { login, me } from "./api.js";
 import { esc, setSession } from "./app.js";
 
 export function renderLogin(container) {
@@ -42,12 +42,17 @@ export function renderLogin(container) {
     if (!email || !password) return;
     btn.disabled = true;
     try {
-      const user = await login(email, password);
+      await login(email, password);
+      const user = await me();
       setSession(user);
     } catch (err) {
+      let message = err.message;
+      if (err.status === 400 && err.detail === "LOGIN_BAD_CREDENTIALS") {
+        message = "Invalid email or password";
+      }
       alertEl.innerHTML = `
         <div class="alert alert-danger py-2">
-          <i class="bi bi-exclamation-triangle me-2"></i>${esc(err.message)}
+          <i class="bi bi-exclamation-triangle me-2"></i>${esc(message)}
         </div>`;
       btn.disabled = false;
     }

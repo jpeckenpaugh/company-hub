@@ -2,6 +2,7 @@ import { renderList } from "./list.js";
 import { renderProfile } from "./profile.js";
 import { renderForm } from "./form.js";
 import { renderIndustries } from "./industries.js";
+import { renderPassword } from "./password.js";
 import { renderLogin } from "./login.js";
 import { me, logout, setOnUnauthorized } from "./api.js";
 
@@ -93,6 +94,7 @@ function parseRoute(hash) {
   const parts = path.split("/").filter(Boolean);
   if (parts.length === 0) return { name: "list" };
   if (parts[0] === "industries") return { name: "industries" };
+  if (parts[0] === "password") return { name: "password" };
   if (parts[0] === "companies") {
     if (parts[1] === "new") return { name: "form", companyId: null };
     if (parts[1] && parts[2] === "edit")
@@ -119,6 +121,7 @@ function render(route) {
   if (route.name === "profile") renderProfile(view, route.companyId);
   else if (route.name === "form") renderForm(view, route.companyId);
   else if (route.name === "industries") renderIndustries(view);
+  else if (route.name === "password") renderPassword(view);
   else renderList(view);
 }
 

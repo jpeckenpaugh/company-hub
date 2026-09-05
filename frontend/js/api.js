@@ -54,6 +54,11 @@ export const logout = () =>
 
 export const me = () => http(`${API_BASE}/auth/me`, { bypassAuth: true });
 
+export const changePassword = (oldPassword, newPassword) =>
+  http(`${API_BASE}/auth/change-password`, {
+    ...json("POST", { old_password: oldPassword, new_password: newPassword }),
+  });
+
 export const listIndustries = () => http(`${API_BASE}/industries`);
 
 export const createIndustry = (name) =>

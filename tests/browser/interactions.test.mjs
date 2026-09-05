@@ -402,3 +402,57 @@ test("logo removed via UI renders nothing", async () => {
     await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('no logo set')`)
   );
 });
+
+// --- Sprint 02 auth (self-service password change) ---
+
+test("password changed via UI; old password rejected, new password signs in, then restored", async () => {
+  const NEW_PW = "sprint02-new-admin-pw";
+
+  await cdp.evalJs("location.hash = '#/password'");
+  await cdp.waitFor(`!!document.getElementById('password-form')`);
+
+  await cdp.evalJs(`
+    (() => {
+      const f = document.getElementById('password-form');
+      f.elements['current_password'].value = ${JSON.stringify(PW)};
+      f.elements['new_password'].value = ${JSON.stringify(NEW_PW)};
+      f.elements['confirm_password'].value = ${JSON.stringify(NEW_PW)};
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(
+    await cdp.waitFor(`(document.body.innerText||'').includes('Password updated')`)
+  );
+
+  await cdp.evalJs("document.getElementById('nav-logout').click()");
+  await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('sign in to continue')`);
+
+  await cdp.evalJs(loginEvalJs(PW));
+  assert.ok(
+    await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('invalid email or password')`)
+  );
+
+  await cdp.evalJs(loginEvalJs(NEW_PW));
+  await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('add company')`);
+
+  await cdp.evalJs("location.hash = '#/password'");
+  await cdp.waitFor(`!!document.getElementById('password-form')`);
+  await cdp.evalJs(`
+    (() => {
+      const f = document.getElementById('password-form');
+      f.elements['current_password'].value = ${JSON.stringify(NEW_PW)};
+      f.elements['new_password'].value = ${JSON.stringify(PW)};
+      f.elements['confirm_password'].value = ${JSON.stringify(PW)};
+      f.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+    })()
+  `);
+  assert.ok(
+    await cdp.waitFor(`(document.body.innerText||'').includes('Password updated')`)
+  );
+
+  await cdp.evalJs("document.getElementById('nav-logout').click()");
+  await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('sign in to continue')`);
+
+  await cdp.evalJs(loginEvalJs(PW));
+  await cdp.waitFor(`(document.body.innerText||'').toLowerCase().includes('add company')`);
+});
