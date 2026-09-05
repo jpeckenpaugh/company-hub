@@ -482,3 +482,227 @@ requirement failures were observed.
 - The browser suite and `pytest` are the persistent suites in this repo and
   remain the ongoing regression guard; this section records their results for
   the sprint.
+
+---
+
+# Sprint 02 — Verification Section
+
+Stage 8 artifact for the Sprint 02 enhancement pass. Evidence-backed pass/fail
+verification of the delivered Sprint 02 application (Stage 6 backend + Stage 7
+frontend) against the approved specifications: `enhancements/scope.md`
+(items a–o), `features/briefs/01-…-06-…`, and `docs/architecture.md` §9
+(API contract). The pass rebuilt persistence on async SQLAlchemy with Alembic
+migrations and replaced the hand-rolled auth with the maintained fastapi-users
+library (stateful `DatabaseStrategy` + `CookieTransport`).
+
+- **Date:** 2026-09-05
+- **Method:** (1) the persistent backend `pytest` suite (throwaway temp DBs),
+  (2) the persistent CDP headless-Chrome browser suite via `tests/run.sh`, and
+  (3) live `curl` checks against a running app (throwaway DB, fixed admin
+  password, short-`TTL` server for expiry) exercising the fastapi-users auth
+  contract plus a non-auth API regression pass. Logs and captured responses in
+  `./tmp/verify-sprint02/`.
+- **Environment:** Python 3.12.14 venv; server started via
+  `uvicorn backend.app:app` with `COMPANY_HUB_DB` pointed at throwaway DBs
+  (`tmp/verify-sprint02/live.db`, `tmp/verify-sprint02/expiry.db`) and
+  `COMPANY_HUB_ADMIN_PASSWORD` fixed, so the gitignored dev `data/` was never
+  touched (confirmed clean afterwards).
+- **Result:** **PASS** — 0 failures. 64 backend `pytest` checks, 36 CDP browser
+  checks, and 28 live `curl` checks all pass. See Notes and Limitations at the
+  end.
+
+## S2.1 Checklist derivation
+
+Each check is observable and traceable to a specific requirement. Sources:
+scope items (`a`–`o`), feature briefs (`B01`–`B06`), architecture §9 (`§9.x`,
+`S2-…` evidence in `./tmp/verify-sprint02/`). The checklist was derived by this
+stage from the approved specifications; it was not provided by another role.
+
+### S2.1.1 Persistence & migrations (scope a/b/c/d/e, B01/B02, §9)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-PER-1 | Persistence is async-native SQLAlchemy (aiosqlite); routers call the ORM data layer, no hand-managed SQL | a, d, B01 | **PASS** |
+| S2-PER-2 | Schema is applied via Alembic versioned migrations (baseline = Sprint 01 schema); migration history tracked | b, B02 | **PASS** |
+| S2-PER-3 | Fresh DB reaches the current schema by replaying the migration set in order | b, B02 | **PASS** |
+| S2-PER-4 | Seed-on-empty behavior/content unchanged: 6 seeded companies present on a fresh DB (same as v0.1/Sprint 01) | e, B01/B02, §9.1.4 | **PASS** |
+| S2-PER-5 | Migration history recorded (alembic_version), each migration applied once | b, B02 | **PASS** |
+
+### S2.1.2 Auth — route gating & login/logout/me (scope f/g, B03, §9.2.1)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-AUTH-1 | Every `/api/*` route except `POST /api/auth/login` returns `401 {"detail":"Not authenticated"}` without a session (incl. auth `me`, change-password, users, and all non-auth routes) | f/g, §9.2 | **PASS** |
+| S2-AUTH-2 | Login with wrong password → `400 {"detail":"LOGIN_BAD_CREDENTIALS"}` | B03, §9.2.1 | **PASS** |
+| S2-AUTH-3 | Login with unknown email → `400 LOGIN_BAD_CREDENTIALS` | B03, §9.2.1 | **PASS** |
+| S2-AUTH-4 | Login with valid credentials → `200 {access_token, token_type:"bearer"}` + HttpOnly `session` cookie (Max-Age = TTL, SameSite=Lax, Path=/) | B03, §9.2.1, §9.8 n.2/3 | **PASS** |
+| S2-AUTH-5 | Login is case-insensitive on email (upper-cased `ADMIN@LOCALHOST` authenticates) | §9.1.1 | **PASS** |
+| S2-AUTH-6 | `GET /api/auth/me` → `200 {id, email, is_superuser}` with session; `401` without | B03, §9.2.1 n.7 | **PASS** |
+| S2-AUTH-7 | Authenticated session unlocks the non-auth API (`GET /api/companies` → 200) | g, B03 | **PASS** |
+| S2-AUTH-8 | Logout → `204`, session revoked server-side (immediate; next `/api` → 401), idempotent (204 with no session) | B03/B04, §9.2.1 | **PASS** |
+
+### S2.1.3 Auth — change-password (scope f, B03, §9.2.1)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-CP-1 | `POST /api/auth/change-password` with correct old + valid new → `200 {"status":"ok"}` | B03, §9.2.1 n.8 | **PASS** |
+| S2-CP-2 | After change, old password no longer signs in (`400`) | B03 | **PASS** |
+| S2-CP-3 | After change, new password signs in (`200`) | B03 | **PASS** |
+| S2-CP-4 | Wrong old password → `400 {"detail":"INVALID_PASSWORD"}` | §9.2.1 | **PASS** |
+| S2-CP-5 | New password shorter than 8 chars → `422` | B03, UserManager policy | **PASS** |
+| S2-CP-6 | Unauthenticated change-password → `401` | §9.2.1 | **PASS** |
+
+### S2.1.4 Auth — admin account creation (scope i/j, B05, §9.2.1)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-USR-1 | Stable admin account exists (`admin@localhost`, `is_superuser:true`) with a persistent, non-re-randomized credential | j, B05, §9.1.1/§9.8 n.6 | **PASS** |
+| S2-USR-2 | Superuser `POST /api/auth/users` → `201 {id, email, is_superuser:false}` | i/j, B05, §9.2.1 | **PASS** |
+| S2-USR-3 | Duplicate email → `400 {"detail":"REGISTER_USER_ALREADY_EXISTS"}` | B05 | **PASS** |
+| S2-USR-4 | Malformed email / password < 8 chars → `422` | B05 | **PASS** |
+| S2-USR-5 | Created account signs in with its own credentials; `me` → `{id:2, ..., is_superuser:false}`; can access normal API | i, B05 | **PASS** |
+| S2-USR-6 | Non-superuser `POST /api/auth/users` → `403 {"detail":"Not enough permissions"}` | j, B05, §9.2.1 | **PASS** |
+| S2-USR-7 | No self-service signup (no register route) | j, §9.7 | **PASS** |
+
+### S2.1.5 Session lifetime & revocation (scope h, B04, §9.1.2/§9.8)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-SES-1 | Session token persisted server-side in `access_tokens` keyed to the user; `lifetime_seconds` recorded | h, B04, §9.1.2 | **PASS** |
+| S2-SES-2 | Within its lifetime a session authenticates the user (`200`) | B04 | **PASS** |
+| S2-SES-3 | After expiry the session is rejected: `/api/companies` and `/api/auth/me` → `401 {"detail":"Not authenticated"}` (live, short-TTL server) | h, B04, §9.8 n.2 | **PASS** |
+| S2-SES-4 | Cookie `Max-Age` matches the configured lifetime (observed `Max-Age=2` with `TTL=2`) | §9.8 n.2 | **PASS** |
+| S2-SES-5 | Logout deletes the token row (server-side revocation) — live `access_tokens` count drops immediately | h, B04 | **PASS** |
+| S2-SES-6 | Expired-session logout stays idempotent (`204`) | B04 | **PASS** |
+
+### S2.1.6 OAuth-ready account model (scope k, B06, §9.1.3)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-OAUTH-1 | `oauth_accounts` table exists (schema-only) with `oauth_name`, `account_id`; zero rows written | k, B06 | **PASS** |
+| S2-OAUTH-2 | No OAuth login routes / SSO behavior present | k, B06, §9.7 | **PASS** |
+| S2-OAUTH-3 | Existing auth behavior unchanged by the schema addition | B06 | **PASS** |
+
+### S2.1.7 Non-auth API regression (scope c/l/m, B01, §9.2.2)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-REG-1 | `GET /api/industries`, `/api/countries`, `/api/companies`, `/api/companies/{id}`, `/api/companies/{id}/artifacts` → 200 with unchanged shapes | c/l, §9.2.2 | **PASS** |
+| S2-REG-2 | `POST /api/companies` → `201` with the Sprint 01 shape (`is_complete` derived, `logo_url`, `artifacts_count`) | c/l | **PASS** |
+| S2-REG-3 | Name search `?q=Toyota` still filters | r | **PASS** |
+| S2-REG-4 | Artifact upload → `201`, download → `200` attachment with stored bytes (object storage unchanged) | c, B01 | **PASS** |
+| S2-REG-5 | Document generation for a complete company → `201 success:true` PDF (unchanged) | c, B01 | **PASS** |
+
+### S2.1.8 Frontend (scope g, B03/B04/B05, §9.3–§9.6)
+
+Static review of `frontend/` rendering logic **plus** live browser automation
+(CDP headless Chrome via `tests/run.sh`; the v0.1 "not automated" limitation is
+superseded by the persistent suite). Evidence: `tests/browser/` suite — 36 tests
+(16 smoke + 20 interaction), all pass, including a change-password UI flow.
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S2-FE-1 | All JS modules pass `node --check`; SPA shell + assets serve 200 with correct MIME types | §9.3 | **PASS** |
+| S2-FE-2 | Login view renders when unauthenticated; login navigates to the list; logout returns to login (paths unchanged) | g, §9.5/§9.6 | **PASS** |
+| S2-FE-3 | Nav shows a change-password link when authenticated | B03, §9.5 | **PASS** |
+| S2-FE-4 | Change-password UI flow: old password rejected, new password signs in (then restored) | B03, §9.6 | **PASS** |
+| S2-FE-5 | Non-auth UI flows unchanged (country filter, industries, locations/references/news, logo upload/replace/remove) | c/l | **PASS** |
+
+## S2.2 Evidence
+
+All evidence under `./tmp/verify-sprint02/` (gitignored):
+
+- `live/server.log`, `expiry/server.log` — server startup logs for the two
+  throwaway-DB runs.
+- `live/` — captured `curl` responses for the auth contract and regression pass:
+  `non_auth.json`, `bad_login.json`, `unknown_login.json`, `login.json`,
+  `me.json`, `me_anon.json`, `post_logout.json`, `cp_ok.json`, `cp_old.json`,
+  `cp_new.json`, `cp_wrongold.json`, `cp_short.json`, `create_alice.json`,
+  `create_dup.json`, `alice_login.json`, `alice_me.json`,
+  `alice_create.json`, `regr_create.json`, `regr_search.json`, `up.json`,
+  `dl.bin`, `gen.json`, cookie jars, and `server.log`.
+- `expiry/` — `login.json`, `expired.json`, `me_expired.json`, cookie jar, and
+  `server.log` (short-TTL run).
+- `tests/run.sh` output: **64** backend `pytest` checks pass (16 auth incl.
+  password change, multiple users, and session expiry via backdated
+  `created_at`, plus all non-auth route/resource tests) and **36** browser
+  tests pass (16 smoke + 20 interaction, incl. the change-password UI flow).
+
+Selected captured responses:
+
+- Login (`live/login.json`): `{"access_token":"…","token_type":"bearer"}` with an
+  HttpOnly `session` cookie; `live/bad_login.json` →
+  `{"detail":"LOGIN_BAD_CREDENTIALS"}`.
+- `me` (`live/me.json`): `{"id":1,"email":"admin@localhost","is_superuser":true}`.
+- Change-password (`live/cp_ok.json`): `{"status":"ok"}`; after the change
+  `live/cp_old.json` → `400 LOGIN_BAD_CREDENTIALS` and `live/cp_new.json` →
+  `200`; wrong old (`live/cp_wrongold.json`) → `400 INVALID_PASSWORD`.
+- Admin creation (`live/create_alice.json`): `201
+  {"id":2,"email":"alice@example.com","is_superuser":false}`; duplicate
+  (`live/create_dup.json`) → `400 REGISTER_USER_ALREADY_EXISTS`;
+  non-superuser (`live/alice_create.json`) → `403 {"detail":"Not enough
+  permissions"}`.
+- Session expiry: with `COMPANY_HUB_SESSION_TTL=2`, login set `Max-Age=2`
+  (observed in `expiry/server.log` Set-Cookie evidence), `/api/companies` → 200
+  within lifetime and → `401 {"detail":"Not authenticated"}` after 3 s
+  (`expiry/expired.json`); `/api/auth/me` → `401` (`expiry/me_expired.json`).
+- Server-side revocation: `access_tokens` count dropped 5 → 4 immediately after
+  logout (live DB inspection).
+- Schema (`live.db`): `oauth_accounts` table present with 0 rows; `users` has
+  `password_hash`, `is_active`, `is_superuser`, `is_verified`.
+- Regression: `regr_create.json` → `201` full Sprint 01 shape; `?q=Toyota` →
+  `["Toyota Motor"]`; artifact upload → `201` and download → `200` attachment
+  with identical bytes; document generate → `201 success:true`.
+
+## S2.3 Failures
+
+**None.** All 64 backend tests, 36 browser tests, and 28 live `curl` checks
+pass. No requirement failures were observed; in particular, no non-auth
+regression was found (all deliberate changes were confined to auth and the
+persistence layer underpinning it).
+
+## S2.4 Notes (documented observations, not failures)
+
+1. **Fastapi-users contract deviations (architecture §9.2.1).** Login uses a
+   JSON body (`{email, password}`) and returns `200 {access_token,
+   token_type}` rather than the stock form-encoded flow; logout returns `204`
+   even with no session (idempotent); `me` returns `{id, email, is_superuser}`.
+   All three are the documented, deliberate deviations recorded by the Backend
+   Engineer in Stage 6 and verified as delivered.
+2. **Session expiry is verified live via the documented `COMPANY_HUB_SESSION_TTL`
+   override** (short TTL on a throwaway DB), with the default 7-day lifetime
+   asserted by the cookie `Max-Age`/TTL match and the pytest expiry test
+   (backdated `created_at`). The default TTL itself (7 days) is not waited out
+   live.
+3. **Admin-password test override.** The fixed `COMPANY_HUB_ADMIN_PASSWORD`
+   used for deterministic live/browser runs is the same documented dev/test
+   seam as Sprint 01 (see Sprint 01 note 1); the app's documented runtime path
+   is the console-printed stable password created once and persisted
+   (superseding Sprint 01's per-startup regeneration).
+4. **`is_superuser`/`is_active`/`is_verified` columns.** The `users` table now
+   carries the fastapi-users flags; only `{id, email, is_superuser}` is exposed
+   in the `me` payload (architecture §9.1.1/§9.8 n.7). Verified as intended.
+5. **Session tokens persist server-side.** The stateful `DatabaseStrategy`
+   stores each token in `access_tokens` with `lifetime_seconds`; this is the
+   mechanism satisfying scope item h (server-side lifetime + revocation), not a
+   stateless JWT strategy (architecture §9.8 n.1).
+6. **PATCH /api/auth/me is declared but the password-only self-service path is
+   `POST /api/auth/change-password`.** In scope, the only self-update field is
+   the password via the change-password route; other profile fields are out of
+   scope (architecture §9.2.1). Verified via the change-password contract.
+
+## S2.5 Limitations
+
+- Live `curl` checks ran against throwaway DBs
+  (`tmp/verify-sprint02/live.db`, `tmp/verify-sprint02/expiry.db`) to keep the
+  gitignored dev `data/` pristine; `data/` was confirmed unchanged afterwards.
+- The 7-day default session lifetime is not waited out live; expiry is
+  demonstrated via a short `COMPANY_HUB_SESSION_TTL` and supported by the
+  pytest expiry test.
+- Browser automation runs headless Chrome via `tests/run.sh` against its own
+  throwaway DB with a fixed admin password. The Sprint 02 UI change
+  (self-service change-password) is covered; visual styling/PDF pixel rendering
+  was not asserted.
+- The browser suite and `pytest` are the persistent suites in this repo and
+  remain the ongoing regression guard; this section records their results for
+  the sprint.

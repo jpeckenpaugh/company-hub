@@ -239,9 +239,18 @@ The **Sprint 01** enhancement pass (authentication, standardized industries,
 standardized countries and locations, country filter, references, news, logos,
 and the real-company seed) is likewise **complete and verified**: PASS with 0
 failures across 93 live `curl` checks, 51 backend `pytest` checks, and 34 CDP
-browser-automation checks. The working tree is clean on `main` and up to date
-with `origin`. See `COMPARISON.md` for the v0.1 → Sprint 01 feature-set change
-summary.
+browser-automation checks. See `COMPARISON.md` for the v0.1 → Sprint 01
+feature-set change summary.
+
+The **Sprint 02** enhancement pass (persistence rebuilt on async SQLAlchemy
+with Alembic versioned migrations, and hand-rolled auth replaced by the
+maintained fastapi-users library) is **complete and verified**: PASS with 0
+failures across 64 backend `pytest` checks, 36 CDP browser-automation checks
+(incl. a self-service change-password UI flow), and 28 live `curl` checks
+exercising the fastapi-users auth contract (login/me/logout, change-password,
+superuser-only account creation, session expiry + server-side revocation, and a
+non-auth API regression pass). The working tree is clean on `main` and up to
+date with `origin`.
 
 ## Verification results
 
@@ -257,6 +266,15 @@ surface live, plus static review of the frontend rendering logic. See
   documents, run against a throwaway DB using the real printed-password login),
   51 backend `pytest` checks, and 34 CDP headless-Chrome browser checks, plus
   static frontend review (all seven JS modules pass `node --check`).
+- **Sprint 02 (2026-09-05): PASS — 0 failures** — 64 backend `pytest` checks
+  (16 auth: route gating, login/logout/me, change-password, multiple users,
+  session expiry; plus all non-auth resources), 36 CDP headless-Chrome browser
+  checks (incl. the new change-password UI flow), and 28 live `curl` checks
+  against a running app exercising the fastapi-users auth contract
+  (login/me/logout, change-password, superuser-only account creation, session
+  expiry via a short-TTL throwaway server, server-side revocation, and a
+  non-auth API regression pass), run against throwaway DBs so `data/` was
+  untouched.
 
 Three v0.1 checks pass with notes; these are documented human resolutions from
 earlier stages, not defects (see Known issues below).
@@ -304,9 +322,11 @@ Remaining items:
 - **SQLite autoincrement sequence is not reset when the seeded database is
   restored**; new ids continue after the highest ever used. Ids remain stable and
   monotonic, so this is cosmetic.
-- **Sessions have no expiry.** Sessions persist until logout or a database flush;
-  there is no idle/session timeout this sprint (acceptable for a single-user dev
-  tool). A timeout is a candidate future pass.
+- **Sessions have no expiry (superseded).** Previously sessions persisted until
+  logout or a database flush. **Added in Sprint 02:** sessions now have a
+  defined server-side lifetime (default 7 days, `COMPANY_HUB_SESSION_TTL` to
+  override) enforced by the fastapi-users stateful `DatabaseStrategy`, with
+  immediate server-side revocation on sign-out.
 - **No visual/pixel assertions.** Browser automation asserts behavior (DOM,
   rendering, flows) but not visual styling or PDF pixel rendering; screenshot/
   visual checks are a candidate future pass.
@@ -324,8 +344,6 @@ Remaining items:
   fully into memory.
 - **PDF plaintext embedding.** Investigate embedding PDF text so it is
   greppable as plaintext regardless of host font availability.
-- **Session expiry / timeout.** Add an idle or absolute session timeout; the
-  current sessions persist until logout or a DB flush.
 - **Visual / screenshot checks.** Extend the browser suite to assert visual
   styling and PDF pixel rendering.
 - **Automated scraping workflows.** Reference, news, and logo scraping per scope
@@ -336,4 +354,6 @@ Remaining items:
   printed-password flow.
 
 Completed since v0.1 (no longer open): **browser-automation verification** (now
-a persistent CDP suite) and **authentication** (added in Sprint 01).
+a persistent CDP suite), **authentication** (added in Sprint 01, rebuilt on
+fastapi-users in Sprint 02), and **session expiry / server-side session
+lifetime** (added in Sprint 02).
