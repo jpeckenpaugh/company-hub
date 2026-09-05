@@ -2,7 +2,8 @@
 
 Sprint 01: company requests carry ``industry_id`` (a controlled reference)
 instead of free-form ``industry``/``hq_location`` text. All structured company
-fields are optional except ``name``, which must be non-empty.
+fields are optional except ``name``, which must be non-empty. Auth request
+models (login/change-password/user-create) live in ``backend/auth/schemas.py``.
 """
 
 import re
@@ -43,11 +44,6 @@ class IndustryIn(BaseModel):
     @classmethod
     def name_must_not_be_blank(cls, v: str) -> str:
         return _strip_non_empty(v)
-
-
-class LoginIn(BaseModel):
-    email: str
-    password: str
 
 
 class LocationIn(BaseModel):

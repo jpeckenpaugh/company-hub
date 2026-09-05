@@ -1,40 +1,42 @@
-"""Artifact upload / list / download / delete, plus logo upload/replace/remove.
+"""Artifact upload / list / download / delete, plus logo upload/replace/remove
+(async SQLAlchemy).
 
 Logos are stored objects like any other artifact (bytes under
 ``data/artifacts/<company_id>/`` plus a metadata row with ``source = 'logo'``)
 but are surfaced separately via ``logo_url`` and excluded from the generic
 Files & artifacts list. At most one logo per company is enforced by a partial
 unique index; replacing one deletes the previous row (and its bytes) before
-inserting the new row within a single transaction.
+inserting the new row within a single transaction. File bytes are handled via
+the storage service (off the request loop).
 """
 
-from fastapi import APIRouter, HTTPException, UploadFile
+import asyncio
 
-from backend.services import storage
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db import connection, utc_now
-from backend.models import artifact_to_dict
+from backend.config import utc_now
+from backend.db.session import get_session
+from backend.models.artifact import Artifact
+from backend.models.company import Company
+from backend.serializers import artifact_to_dict
+from backend.services import storage
 
 router = APIRouter(tags=["artifacts"])
 
 
-def _fetch_company(conn, company_id: int):
-    row = conn.execute(
-        "SELECT id FROM companies WHERE id = ?", (company_id,)
-    ).fetchone()
-    if row is None:
+async def _fetch_company(session: AsyncSession, company_id: int) -> None:
+    if await session.get(Company, company_id) is None:
         raise HTTPException(status_code=404, detail="Company not found")
-    return row
 
 
-def _fetch_artifact(conn, artifact_id: int):
-    row = conn.execute(
-        "SELECT * FROM artifacts WHERE id = ?", (artifact_id,)
-    ).fetchone()
-    if row is None:
+async def _fetch_artifact(session: AsyncSession, artifact_id: int) -> Artifact:
+    artifact = await session.get(Artifact, artifact_id)
+    if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
-    return row
+    return artifact
 
 
 def _require_filename(file: UploadFile) -> None:
@@ -44,138 +46,140 @@ def _require_filename(file: UploadFile) -> None:
         )
 
 
-def _insert_artifact_row(
-    conn, company_id: int, original_name: str, stored_filename: str,
-    content_type: str, content: bytes, source: str,
-):
-    cur = conn.execute(
-        "INSERT INTO artifacts (company_id, original_name, stored_filename, "
-        "content_type, size_bytes, created_at, source) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (
-            company_id,
-            original_name,
-            stored_filename,
-            content_type,
-            len(content),
-            utc_now(),
-            source,
-        ),
-    )
-    return conn.execute(
-        "SELECT * FROM artifacts WHERE id = ?", (cur.lastrowid,)
-    ).fetchone()
-
-
 @router.post("/companies/{company_id}/artifacts", status_code=201)
-def upload_artifact(company_id: int, file: UploadFile):
+async def upload_artifact(
+    company_id: int, file: UploadFile, session: AsyncSession = Depends(get_session)
+):
     _require_filename(file)
-    content = file.file.read()
+    content = await file.read()
     stored_filename = storage.new_stored_filename(file.filename or "")
-    storage.save(company_id, stored_filename, content)
+    await asyncio.to_thread(storage.save, company_id, stored_filename, content)
     try:
-        with connection() as conn:
-            _fetch_company(conn, company_id)
-            row = _insert_artifact_row(
-                conn,
-                company_id,
-                file.filename,
-                stored_filename,
-                file.content_type or "application/octet-stream",
-                content,
-                "upload",
-            )
+        await _fetch_company(session, company_id)
+        artifact = Artifact(
+            company_id=company_id,
+            original_name=file.filename,
+            stored_filename=stored_filename,
+            content_type=file.content_type or "application/octet-stream",
+            size_bytes=len(content),
+            created_at=utc_now(),
+            source="upload",
+        )
+        session.add(artifact)
+        await session.commit()
+        await session.refresh(artifact)
     except Exception:
-        storage.delete(company_id, stored_filename)
+        await asyncio.to_thread(storage.delete, company_id, stored_filename)
         raise
-    return artifact_to_dict(row)
+    return artifact_to_dict(artifact)
 
 
 @router.get("/companies/{company_id}/artifacts")
-def list_artifacts(company_id: int):
-    with connection() as conn:
-        _fetch_company(conn, company_id)
-        rows = conn.execute(
-            "SELECT * FROM artifacts WHERE company_id = ? AND source != 'logo' "
-            "ORDER BY id DESC",
-            (company_id,),
-        ).fetchall()
-        return [artifact_to_dict(r) for r in rows]
+async def list_artifacts(
+    company_id: int, session: AsyncSession = Depends(get_session)
+):
+    await _fetch_company(session, company_id)
+    rows = (
+        await session.scalars(
+            select(Artifact)
+            .where(Artifact.company_id == company_id, Artifact.source != "logo")
+            .order_by(Artifact.id.desc())
+        )
+    ).all()
+    return [artifact_to_dict(a) for a in rows]
 
 
 @router.get("/artifacts/{artifact_id}/content")
-def download_artifact(artifact_id: int):
-    with connection() as conn:
-        row = _fetch_artifact(conn, artifact_id)
-        path = storage.read(row["company_id"], row["stored_filename"])
-        if not path.is_file():
-            raise HTTPException(status_code=404, detail="Artifact not found")
-        return FileResponse(
-            path,
-            media_type=row["content_type"],
-            filename=row["original_name"],
-        )
+async def download_artifact(
+    artifact_id: int, session: AsyncSession = Depends(get_session)
+):
+    artifact = await _fetch_artifact(session, artifact_id)
+    path = storage.read(artifact.company_id, artifact.stored_filename)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return FileResponse(
+        path,
+        media_type=artifact.content_type,
+        filename=artifact.original_name,
+    )
 
 
 @router.delete("/artifacts/{artifact_id}", status_code=204)
-def delete_artifact(artifact_id: int):
-    with connection() as conn:
-        row = _fetch_artifact(conn, artifact_id)
-        conn.execute("DELETE FROM artifacts WHERE id = ?", (artifact_id,))
-    storage.delete(row["company_id"], row["stored_filename"])
+async def delete_artifact(
+    artifact_id: int, session: AsyncSession = Depends(get_session)
+):
+    artifact = await _fetch_artifact(session, artifact_id)
+    company_id, stored_filename = artifact.company_id, artifact.stored_filename
+    await session.delete(artifact)
+    await session.commit()
+    await asyncio.to_thread(storage.delete, company_id, stored_filename)
     return None
 
 
 @router.post("/companies/{company_id}/logo", status_code=201)
-def upload_logo(company_id: int, file: UploadFile):
+async def upload_logo(
+    company_id: int, file: UploadFile, session: AsyncSession = Depends(get_session)
+):
     _require_filename(file)
     if not (file.content_type or "").startswith("image/"):
         raise HTTPException(status_code=415, detail="Logo must be an image")
-    with connection() as conn:
-        _fetch_company(conn, company_id)
-    content = file.file.read()
+    await _fetch_company(session, company_id)
+    content = await file.read()
     stored_filename = storage.new_stored_filename(file.filename or "")
-    storage.save(company_id, stored_filename, content)
+    await asyncio.to_thread(storage.save, company_id, stored_filename, content)
     old_row = None
+    old_company_id = None
+    old_stored = None
     try:
-        with connection() as conn:
-            _fetch_company(conn, company_id)
-            old_row = conn.execute(
-                "SELECT * FROM artifacts WHERE company_id = ? AND source = 'logo' "
-                "ORDER BY id DESC LIMIT 1",
-                (company_id,),
-            ).fetchone()
-            conn.execute(
-                "DELETE FROM artifacts WHERE company_id = ? AND source = 'logo'",
-                (company_id,),
+        old_row = (
+            await session.scalars(
+                select(Artifact)
+                .where(Artifact.company_id == company_id, Artifact.source == "logo")
+                .order_by(Artifact.id.desc())
             )
-            row = _insert_artifact_row(
-                conn,
-                company_id,
-                file.filename,
-                stored_filename,
-                file.content_type or "application/octet-stream",
-                content,
-                "logo",
-            )
+        ).first()
+        if old_row is not None:
+            old_company_id, old_stored = old_row.company_id, old_row.stored_filename
+            await session.delete(old_row)
+            # Flush the delete before inserting the replacement: the partial
+            # unique index idx_artifacts_one_logo forbids two 'logo' rows for a
+            # company, and the ORM flush order would otherwise insert first.
+            await session.flush()
+        artifact = Artifact(
+            company_id=company_id,
+            original_name=file.filename,
+            stored_filename=stored_filename,
+            content_type=file.content_type or "application/octet-stream",
+            size_bytes=len(content),
+            created_at=utc_now(),
+            source="logo",
+        )
+        session.add(artifact)
+        await session.commit()
+        await session.refresh(artifact)
     except Exception:
-        storage.delete(company_id, stored_filename)
+        await asyncio.to_thread(storage.delete, company_id, stored_filename)
         raise
     if old_row is not None:
-        storage.delete(company_id, old_row["stored_filename"])
-    return artifact_to_dict(row)
+        await asyncio.to_thread(storage.delete, old_company_id, old_stored)
+    return artifact_to_dict(artifact)
 
 
 @router.delete("/companies/{company_id}/logo", status_code=204)
-def delete_logo(company_id: int):
-    with connection() as conn:
-        row = conn.execute(
-            "SELECT * FROM artifacts WHERE company_id = ? AND source = 'logo' "
-            "ORDER BY id DESC LIMIT 1",
-            (company_id,),
-        ).fetchone()
-        if row is None:
-            raise HTTPException(status_code=404, detail="Logo not found")
-        conn.execute("DELETE FROM artifacts WHERE id = ?", (row["id"],))
-    storage.delete(company_id, row["stored_filename"])
+async def delete_logo(
+    company_id: int, session: AsyncSession = Depends(get_session)
+):
+    logo = (
+        await session.scalars(
+            select(Artifact)
+            .where(Artifact.company_id == company_id, Artifact.source == "logo")
+            .order_by(Artifact.id.desc())
+        )
+    ).first()
+    if logo is None:
+        raise HTTPException(status_code=404, detail="Logo not found")
+    cid, stored_filename = logo.company_id, logo.stored_filename
+    await session.delete(logo)
+    await session.commit()
+    await asyncio.to_thread(storage.delete, cid, stored_filename)
     return None

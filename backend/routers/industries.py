@@ -1,4 +1,5 @@
-"""Industry reference data: list, add, and rename (no delete this sprint).
+"""Industry reference data: list, add, and rename (no delete this sprint)
+via the async ORM.
 
 Industries are controlled references: companies store ``industry_id`` and never
 the label, so a rename resolves everywhere automatically. Duplicate detection is
@@ -6,63 +7,63 @@ case-insensitive at the application layer so the controlled vocabulary cannot
 accumulate case-variant near-duplicates.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db import connection, utc_now
+from backend.config import utc_now
+from backend.db.session import get_session
+from backend.models.industry import Industry
 from backend.schemas import IndustryIn
 
 router = APIRouter(prefix="/industries", tags=["industries"])
 
-_LIST_ORDER = "ORDER BY name COLLATE NOCASE, name"
 
-
-def _fetch_industry(conn, industry_id: int):
-    row = conn.execute(
-        "SELECT id, name FROM industries WHERE id = ?", (industry_id,)
-    ).fetchone()
-    if row is None:
+async def _fetch_industry(session: AsyncSession, industry_id: int) -> Industry:
+    industry = await session.get(Industry, industry_id)
+    if industry is None:
         raise HTTPException(status_code=404, detail="Industry not found")
-    return row
+    return industry
 
 
-def _existing_id_named(conn, name: str) -> int | None:
-    row = conn.execute(
-        "SELECT id FROM industries WHERE name = ? COLLATE NOCASE", (name,)
-    ).fetchone()
-    return row["id"] if row else None
+async def _existing_id_named(session: AsyncSession, name: str) -> int | None:
+    return await session.scalar(
+        select(Industry.id).where(func.lower(Industry.name) == name.lower())
+    )
 
 
 @router.get("")
-def list_industries():
-    with connection() as conn:
-        rows = conn.execute(
-            f"SELECT id, name FROM industries {_LIST_ORDER}"
-        ).fetchall()
-        return [{"id": r["id"], "name": r["name"]} for r in rows]
+async def list_industries(session: AsyncSession = Depends(get_session)):
+    rows = (
+        await session.scalars(
+            select(Industry).order_by(func.lower(Industry.name), Industry.name)
+        )
+    ).all()
+    return [{"id": r.id, "name": r.name} for r in rows]
 
 
 @router.post("", status_code=201)
-def create_industry(payload: IndustryIn):
+async def create_industry(payload: IndustryIn, session: AsyncSession = Depends(get_session)):
     name = payload.name
-    with connection() as conn:
-        if _existing_id_named(conn, name) is not None:
-            raise HTTPException(status_code=409, detail="Industry already exists")
-        cur = conn.execute(
-            "INSERT INTO industries (name, created_at) VALUES (?, ?)",
-            (name, utc_now()),
-        )
-        return {"id": cur.lastrowid, "name": name}
+    if await _existing_id_named(session, name) is not None:
+        raise HTTPException(status_code=409, detail="Industry already exists")
+    industry = Industry(name=name, created_at=utc_now())
+    session.add(industry)
+    await session.commit()
+    await session.refresh(industry)
+    return {"id": industry.id, "name": industry.name}
 
 
 @router.put("/{industry_id}")
-def rename_industry(industry_id: int, payload: IndustryIn):
+async def rename_industry(
+    industry_id: int, payload: IndustryIn, session: AsyncSession = Depends(get_session)
+):
     name = payload.name
-    with connection() as conn:
-        _fetch_industry(conn, industry_id)
-        existing = _existing_id_named(conn, name)
-        if existing is not None and existing != industry_id:
-            raise HTTPException(status_code=409, detail="Industry already exists")
-        conn.execute(
-            "UPDATE industries SET name = ? WHERE id = ?", (name, industry_id)
-        )
-        return {"id": industry_id, "name": name}
+    await _fetch_industry(session, industry_id)
+    existing = await _existing_id_named(session, name)
+    if existing is not None and existing != industry_id:
+        raise HTTPException(status_code=409, detail="Industry already exists")
+    industry = await _fetch_industry(session, industry_id)
+    industry.name = name
+    await session.commit()
+    return {"id": industry_id, "name": industry.name}

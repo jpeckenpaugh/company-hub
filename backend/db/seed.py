@@ -1,33 +1,39 @@
-"""Sprint 01 seed content, enriched with real references, news, locations, and
-logos.
+"""Sprint 02 seed content — re-homed from ``backend/data/seed.py``.
 
-Seeds the six-industry standard list, the standard country list, and exactly six
-real companies (one per seeded industry). Each company carries all structured
-fields, a Headquarters location, one or two further real locations, two curated
-references (a Wikipedia article and an official about/company-profile page),
-four or five genuine recent news articles (``is_scraped = 0`` — hand-authored,
-not scraped), and a raster logo whose bytes are committed under
-``backend/data/logos/`` and copied into artifact storage at seed time.
+Content and rules are unchanged from Sprint 01 (scope item e): the six-industry
+standard list, the standard country list, and exactly six real companies (one
+per seeded industry). Each company carries all structured fields, a Headquarters
+location, one or two further real locations, two curated references (a Wikipedia
+article and an official about/company-profile page, ``added_by =
+admin@localhost``), three to five genuine recent news articles
+(``is_scraped = 0`` — hand-authored, not scraped), and a raster logo whose
+bytes are committed under ``backend/data/logos/`` and copied into artifact
+storage at seed time.
 
 Content is backend-authored: the architecture specifies the shape and quantity
-(six industries; a curated ~50-100 entry country list covering the G20 plus
-``JP``/``KR``/``GB``/``CH``/``FR``; six named companies with structured fields,
-one HQ and a few locations each, two references, several news articles, and one
-logo) but not every value. References use ``added_by = admin@localhost`` to mark
-them as backend-seeded rather than user-added.
+but not every value.
 
 Seeding runs only when the ``companies`` table is empty and never overwrites
-user-entered data. Country/industry inserts are ``INSERT OR IGNORE`` so a
-partially present standard list never crashes a re-seed; companies are inserted
-only as part of the empty-``companies`` gate.
+user-entered data. Country/industry inserts are get-or-create so a partially
+present standard list never crashes a re-seed; companies are inserted only as
+part of the empty-``companies`` gate.
 """
 
-from datetime import datetime, timezone
+import asyncio
 from pathlib import Path
 
+from sqlalchemy import func, select
+
+from backend.config import PROJECT_ROOT, utc_now
+from backend.models.artifact import Artifact
+from backend.models.company import Company, Location
+from backend.models.country import Country
+from backend.models.industry import Industry
+from backend.models.news_article import NewsArticle
+from backend.models.reference import Reference
 from backend.services import storage
 
-_SEED_LOGOS_DIR = Path(__file__).resolve().parent / "logos"
+_SEED_LOGOS_DIR = PROJECT_ROOT / "backend" / "data" / "logos"
 
 SEED_INDUSTRIES = [
     "Manufacturing",
@@ -425,125 +431,113 @@ SEED_LOGOS = {
 }
 
 
-def _seed_timestamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def seed_if_empty(conn) -> None:
+async def seed_if_empty(session) -> None:
     """Insert industries, countries, and the six companies — each with a
     Headquarters location, extra locations, references, news, and a logo — only
     when the companies table is empty."""
-    count = conn.execute("SELECT COUNT(*) AS n FROM companies").fetchone()["n"]
-    if count > 0:
+    count = await session.scalar(select(func.count()).select_from(Company))
+    if count and count > 0:
         return
-    now = _seed_timestamp()
+    now = utc_now()
 
     industry_ids: dict[str, int] = {}
     for name in SEED_INDUSTRIES:
-        conn.execute(
-            "INSERT OR IGNORE INTO industries (name, created_at) VALUES (?, ?)",
-            (name, now),
-        )
-        row = conn.execute(
-            "SELECT id FROM industries WHERE name = ?", (name,)
-        ).fetchone()
-        industry_ids[name] = row["id"]
+        industry = await session.scalar(select(Industry).where(Industry.name == name))
+        if industry is None:
+            industry = Industry(name=name, created_at=now)
+            session.add(industry)
+            await session.flush()
+        industry_ids[name] = industry.id
 
     for code, name in sorted(COUNTRIES.items(), key=lambda kv: kv[1].lower()):
-        conn.execute(
-            "INSERT OR IGNORE INTO countries (code, name, created_at) "
-            "VALUES (?, ?, ?)",
-            (code, name, now),
-        )
+        country = await session.scalar(select(Country).where(Country.code == code))
+        if country is None:
+            session.add(Country(code=code, name=name, created_at=now))
 
     for company in SEED_COMPANIES:
-        cur = conn.execute(
-            "INSERT INTO companies (name, industry_id, website, contact_email, "
-            "contact_phone, description, created_at, updated_at) "
-            "VALUES (:name, :industry_id, :website, :contact_email, "
-            ":contact_phone, :description, :created_at, :updated_at)",
-            {
-                "name": company["name"],
-                "industry_id": industry_ids[company["industry"]],
-                "website": company["website"],
-                "contact_email": company["contact_email"],
-                "contact_phone": company["contact_phone"],
-                "description": company["description"],
-                "created_at": now,
-                "updated_at": now,
-            },
+        comp = Company(
+            name=company["name"],
+            industry_id=industry_ids[company["industry"]],
+            website=company["website"],
+            contact_email=company["contact_email"],
+            contact_phone=company["contact_phone"],
+            description=company["description"],
+            created_at=now,
+            updated_at=now,
         )
-        company_id = cur.lastrowid
+        session.add(comp)
+        await session.flush()
+        company_id = comp.id
+
         hq = company["hq"]
-        conn.execute(
-            "INSERT INTO locations (company_id, label, address, city, "
-            "country_code, type) VALUES (?, ?, NULL, ?, ?, 'Headquarters')",
-            (company_id, hq["label"], hq["city"], hq["country_code"]),
+        session.add(
+            Location(
+                company_id=company_id,
+                label=hq["label"],
+                address=None,
+                city=hq["city"],
+                country_code=hq["country_code"],
+                type="Headquarters",
+            )
         )
 
         for loc in SEED_EXTRA_LOCATIONS.get(company["name"], []):
-            conn.execute(
-                "INSERT INTO locations (company_id, label, address, city, "
-                "country_code, type) VALUES (?, ?, ?, ?, ?, ?)",
-                (
-                    company_id,
-                    loc["label"],
-                    loc.get("address"),
-                    loc["city"],
-                    loc["country_code"],
-                    loc["type"],
-                ),
+            session.add(
+                Location(
+                    company_id=company_id,
+                    label=loc["label"],
+                    address=loc.get("address"),
+                    city=loc["city"],
+                    country_code=loc["country_code"],
+                    type=loc["type"],
+                )
             )
 
         for ref in SEED_REFERENCES.get(company["name"], []):
-            conn.execute(
-                "INSERT INTO \"references\" (company_id, title, url, description, "
-                "added_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    company_id,
-                    ref["title"],
-                    ref["url"],
-                    ref.get("description"),
-                    "admin@localhost",
-                    now,
-                    now,
-                ),
+            session.add(
+                Reference(
+                    company_id=company_id,
+                    title=ref["title"],
+                    url=ref["url"],
+                    description=ref.get("description"),
+                    added_by="admin@localhost",
+                    created_at=now,
+                    updated_at=now,
+                )
             )
 
         for article in SEED_NEWS.get(company["name"], []):
-            conn.execute(
-                "INSERT INTO news_articles (company_id, title, source, url, "
-                "published_at, summary, is_scraped, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
-                (
-                    company_id,
-                    article["title"],
-                    article["source"],
-                    article["url"],
-                    article["published_at"],
-                    article.get("summary"),
-                    now,
-                    now,
-                ),
+            session.add(
+                NewsArticle(
+                    company_id=company_id,
+                    title=article["title"],
+                    source=article["source"],
+                    url=article["url"],
+                    published_at=article["published_at"],
+                    summary=article.get("summary"),
+                    is_scraped=False,
+                    created_at=now,
+                    updated_at=now,
+                )
             )
 
         logo = SEED_LOGOS.get(company["name"])
         if logo is not None:
             logo_path = _SEED_LOGOS_DIR / logo["file"]
             if logo_path.is_file():
-                content = logo_path.read_bytes()
+                content = await asyncio.to_thread(logo_path.read_bytes)
                 stored_filename = f"seed-logo{logo_path.suffix}"
-                storage.save(company_id, stored_filename, content)
-                conn.execute(
-                    "INSERT INTO artifacts (company_id, original_name, "
-                    "stored_filename, content_type, size_bytes, created_at, "
-                    "source) VALUES (?, ?, ?, ?, ?, ?, 'logo')",
-                    (
-                        company_id,
-                        logo_path.name,
-                        stored_filename,
-                        logo.get("content_type", "image/png"),
-                        len(content),
-                        now,
-                    ),
+                await asyncio.to_thread(storage.save, company_id, stored_filename, content)
+                session.add(
+                    Artifact(
+                        company_id=company_id,
+                        original_name=logo_path.name,
+                        stored_filename=stored_filename,
+                        content_type="image/png",
+                        size_bytes=len(content),
+                        created_at=now,
+                        source="logo",
+                    )
                 )
+
+    await session.commit()

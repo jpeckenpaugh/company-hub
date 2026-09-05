@@ -1,23 +1,29 @@
-"""FastAPI application assembly.
+"""FastAPI application assembly (Sprint 02).
 
 Wire-up only: build the app, mount routers and the frontend static files, and
-initialize runtime state on startup. No business logic lives here.
+initialize runtime state on startup (migrations, bootstrap admin, seed). No
+business logic lives here.
 
-Every ``/api/`` route requires an authenticated session (the ``get_current_user``
-dependency) except ``POST /api/auth/login``; logout is idempotent and does not
-require a session. The frontend static files are served without auth — the SPA
-itself renders the login view when unauthenticated.
+Every ``/api/`` route requires an authenticated session (the fastapi-users
+``get_current_user`` dependency over the stateful ``DatabaseStrategy`` +
+``CookieTransport``) except ``POST /api/auth/login``; logout is idempotent and
+does not require a session. The frontend static files are served without auth —
+the SPA itself renders the login view when unauthenticated.
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from backend.db import PROJECT_ROOT, init_db
+from backend.auth import bootstrap_admin, get_current_user
+from backend.auth.routers import router as auth_router
+from backend.config import FRONTEND_DIR, ensure_dirs
+from backend.db.engine import get_sessionmaker, run_migrations
+from backend.db.seed import seed_if_empty
 from backend.routers import (
     artifacts,
-    auth,
     companies,
     documents,
     industries,
@@ -26,15 +32,15 @@ from backend.routers import (
     reference,
     references,
 )
-from backend.routers.auth import bootstrap_admin, get_current_user
-
-FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
-    bootstrap_admin()
+    ensure_dirs()
+    await asyncio.to_thread(run_migrations)
+    await bootstrap_admin()
+    async with get_sessionmaker()() as session:
+        await seed_if_empty(session)
     yield
 
 
@@ -44,7 +50,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.include_router(auth.router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
 
 _protected = [Depends(get_current_user)]
 for router in (

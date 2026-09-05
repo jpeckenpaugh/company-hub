@@ -8,7 +8,7 @@ database logic.
 import uuid
 from pathlib import Path
 
-from backend.db import ARTIFACTS_DIR
+from backend.config import ARTIFACTS_DIR
 
 
 def company_dir(company_id: int) -> Path:

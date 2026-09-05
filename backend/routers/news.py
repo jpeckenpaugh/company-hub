@@ -1,105 +1,99 @@
-"""Company news sub-resource CRUD.
+"""Company news sub-resource CRUD (async ORM).
 
 UI-created records always have ``is_scraped = false``; the API accepts the flag
 so automated workflows may set it true later. On ``PUT`` an omitted
 ``is_scraped`` preserves the current value.
 """
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.db import connection, utc_now
-from backend.models import news_to_dict
+from backend.config import utc_now
+from backend.db.session import get_session
+from backend.models.company import Company
+from backend.models.news_article import NewsArticle
 from backend.schemas import NewsIn
+from backend.serializers import news_to_dict
 
 router = APIRouter(tags=["news"])
 
 _EDITABLE_FIELDS = ("title", "source", "url", "published_at", "summary")
 
 
-def _fetch_company(conn, company_id: int):
-    row = conn.execute(
-        "SELECT id FROM companies WHERE id = ?", (company_id,)
-    ).fetchone()
-    if row is None:
+async def _fetch_company(session: AsyncSession, company_id: int) -> None:
+    if await session.get(Company, company_id) is None:
         raise HTTPException(status_code=404, detail="Company not found")
-    return row
 
 
-def _fetch_news(conn, company_id: int, news_id: int):
-    row = conn.execute(
-        "SELECT * FROM news_articles WHERE id = ? AND company_id = ?",
-        (news_id, company_id),
-    ).fetchone()
-    if row is None:
+async def _fetch_news(
+    session: AsyncSession, company_id: int, news_id: int
+) -> NewsArticle:
+    article = await session.scalar(
+        select(NewsArticle).where(
+            NewsArticle.id == news_id, NewsArticle.company_id == company_id
+        )
+    )
+    if article is None:
         raise HTTPException(status_code=404, detail="News article not found")
-    return row
+    return article
 
 
-def _scraped_flag(payload: NewsIn, current: int | None = None) -> int:
+def _scraped_flag(payload: NewsIn, current: bool | None = None) -> bool:
     if payload.is_scraped is not None:
-        return int(payload.is_scraped)
-    return int(bool(current)) if current is not None else 0
+        return payload.is_scraped
+    return bool(current) if current is not None else False
 
 
 @router.post("/companies/{company_id}/news", status_code=201)
-def create_news(company_id: int, payload: NewsIn):
+async def create_news(
+    company_id: int, payload: NewsIn, session: AsyncSession = Depends(get_session)
+):
+    await _fetch_company(session, company_id)
     now = utc_now()
-    with connection() as conn:
-        _fetch_company(conn, company_id)
-        cur = conn.execute(
-            "INSERT INTO news_articles (company_id, title, source, url, "
-            "published_at, summary, is_scraped, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                company_id,
-                payload.title,
-                payload.source,
-                payload.url,
-                payload.published_at,
-                payload.summary,
-                _scraped_flag(payload),
-                now,
-                now,
-            ),
-        )
-        row = conn.execute(
-            "SELECT * FROM news_articles WHERE id = ?", (cur.lastrowid,)
-        ).fetchone()
-        return news_to_dict(row)
+    article = NewsArticle(
+        company_id=company_id,
+        title=payload.title,
+        source=payload.source,
+        url=payload.url,
+        published_at=payload.published_at,
+        summary=payload.summary,
+        is_scraped=_scraped_flag(payload),
+        created_at=now,
+        updated_at=now,
+    )
+    session.add(article)
+    await session.commit()
+    await session.refresh(article)
+    return news_to_dict(article)
 
 
 @router.put("/companies/{company_id}/news/{news_id}")
-def update_news(company_id: int, news_id: int, payload: NewsIn):
-    with connection() as conn:
-        _fetch_company(conn, company_id)
-        existing = _fetch_news(conn, company_id, news_id)
-        values = {f: getattr(payload, f) for f in _EDITABLE_FIELDS}
-        conn.execute(
-            "UPDATE news_articles SET title = :title, source = :source, "
-            "url = :url, published_at = :published_at, summary = :summary, "
-            "is_scraped = :is_scraped, updated_at = :updated_at "
-            "WHERE id = :id AND company_id = :company_id",
-            {
-                **values,
-                "is_scraped": _scraped_flag(payload, existing["is_scraped"]),
-                "updated_at": utc_now(),
-                "id": news_id,
-                "company_id": company_id,
-            },
-        )
-        row = conn.execute(
-            "SELECT * FROM news_articles WHERE id = ?", (news_id,)
-        ).fetchone()
-        return news_to_dict(row)
+async def update_news(
+    company_id: int,
+    news_id: int,
+    payload: NewsIn,
+    session: AsyncSession = Depends(get_session),
+):
+    await _fetch_company(session, company_id)
+    existing = await _fetch_news(session, company_id, news_id)
+    for field in _EDITABLE_FIELDS:
+        setattr(existing, field, getattr(payload, field))
+    existing.is_scraped = _scraped_flag(payload, existing.is_scraped)
+    existing.updated_at = utc_now()
+    await session.commit()
+    await session.refresh(existing)
+    return news_to_dict(existing)
 
 
 @router.delete("/companies/{company_id}/news/{news_id}", status_code=204)
-def delete_news(company_id: int, news_id: int):
-    with connection() as conn:
-        _fetch_company(conn, company_id)
-        _fetch_news(conn, company_id, news_id)
-        conn.execute(
-            "DELETE FROM news_articles WHERE id = ? AND company_id = ?",
-            (news_id, company_id),
-        )
+async def delete_news(
+    company_id: int,
+    news_id: int,
+    session: AsyncSession = Depends(get_session),
+):
+    await _fetch_company(session, company_id)
+    article = await _fetch_news(session, company_id, news_id)
+    await session.delete(article)
+    await session.commit()
     return None

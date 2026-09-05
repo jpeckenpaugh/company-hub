@@ -1,6 +1,6 @@
 """References CRUD: added_by is the signed-in user, created_at immutable."""
 
-from backend.routers.auth import ADMIN_EMAIL
+from backend.config import ADMIN_EMAIL
 
 
 def _seed_company_id(authed_client):

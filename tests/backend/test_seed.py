@@ -1,71 +1,83 @@
 """Seed-on-empty contents: industries, countries, companies with locations,
-references, news, and logos."""
+references, news, and logos (inspected directly against the test DB)."""
 
-from backend import db as db_module
-from backend.data.seed import SEED_COMPANIES, SEED_INDUSTRIES
+import sqlite3
 
-
-def _conn(client):
-    return db_module.connect()
+from backend.db.seed import SEED_COMPANIES, SEED_INDUSTRIES
 
 
-def test_seeded_industries(client):
-    conn = _conn(client)
-    rows = conn.execute("SELECT name FROM industries ORDER BY name").fetchall()
-    assert [r["name"] for r in rows] == sorted(SEED_INDUSTRIES)
+def test_seeded_industries(db_path):
+    conn = sqlite3.connect(str(db_path))
+    rows = [r[0] for r in conn.execute("SELECT name FROM industries ORDER BY name")]
     conn.close()
+    assert rows == sorted(SEED_INDUSTRIES)
 
 
-def test_seeded_countries(client):
-    conn = _conn(client)
-    rows = conn.execute("SELECT code, name FROM countries").fetchall()
+def test_seeded_countries(db_path):
+    conn = sqlite3.connect(str(db_path))
+    rows = [dict(zip(("code", "name"), r)) for r in conn.execute("SELECT code, name FROM countries")]
+    conn.close()
     assert len(rows) == 83
-    assert {"code": "GB", "name": "United Kingdom"} in [dict(r) for r in rows]
-    conn.close()
+    assert {"code": "GB", "name": "United Kingdom"} in rows
 
 
-def test_seeded_companies_each_with_one_headquarters(client):
-    conn = _conn(client)
-    companies = conn.execute("SELECT id, name FROM companies").fetchall()
+def test_seeded_companies_each_with_one_headquarters(db_path):
+    conn = sqlite3.connect(str(db_path))
+    companies = [dict(zip(("id", "name"), r)) for r in conn.execute("SELECT id, name FROM companies")]
     assert len(companies) == 6
     assert {r["name"] for r in companies} == {c["name"] for c in SEED_COMPANIES}
 
     for row in companies:
-        hqs = conn.execute(
-            "SELECT COUNT(*) AS n FROM locations WHERE company_id = ? AND type = 'Headquarters'",
+        n = conn.execute(
+            "SELECT COUNT(*) FROM locations WHERE company_id = ? AND type = 'Headquarters'",
             (row["id"],),
-        ).fetchone()["n"]
-        assert hqs == 1, f"{row['name']} should have exactly one HQ"
+        ).fetchone()[0]
+        assert n == 1, f"{row['name']} should have exactly one HQ"
     conn.close()
 
 
-def test_seed_has_references_news_locations_and_logos(client):
-    conn = _conn(client)
-    for row in conn.execute("SELECT id, name FROM companies").fetchall():
-        cid = row["id"]
-
+def test_seed_has_references_news_locations_and_logos(db_path):
+    conn = sqlite3.connect(str(db_path))
+    for cid, name in conn.execute("SELECT id, name FROM companies"):
         refs = conn.execute(
-            'SELECT COUNT(*) AS n FROM "references" WHERE company_id = ?', (cid,)
-        ).fetchone()["n"]
-        assert refs == 2, f"{row['name']} should have exactly two references"
+            'SELECT COUNT(*) FROM "references" WHERE company_id = ?', (cid,)
+        ).fetchone()[0]
+        assert refs == 2, f"{name} should have exactly two references"
 
-        news = conn.execute(
-            "SELECT COUNT(*) AS n, COALESCE(SUM(is_scraped), 0) AS s "
-            "FROM news_articles WHERE company_id = ?",
+        n_news, n_scraped = conn.execute(
+            "SELECT COUNT(*), COALESCE(SUM(is_scraped), 0) FROM news_articles WHERE company_id = ?",
             (cid,),
         ).fetchone()
-        assert news["n"] >= 3, f"{row['name']} should have at least three news articles"
-        assert news["s"] == 0, f"{row['name']} news should be hand-authored, not scraped"
+        assert n_news >= 3, f"{name} should have at least three news articles"
+        assert n_scraped == 0, f"{name} news should be hand-authored, not scraped"
 
         logos = conn.execute(
-            "SELECT COUNT(*) AS n FROM artifacts "
-            "WHERE company_id = ? AND source = 'logo'",
+            "SELECT COUNT(*) FROM artifacts WHERE company_id = ? AND source = 'logo'",
             (cid,),
-        ).fetchone()["n"]
-        assert logos == 1, f"{row['name']} should have exactly one logo"
+        ).fetchone()[0]
+        assert logos == 1, f"{name} should have exactly one logo"
 
         locs = conn.execute(
-            "SELECT COUNT(*) AS n FROM locations WHERE company_id = ?", (cid,)
-        ).fetchone()["n"]
-        assert locs >= 2, f"{row['name']} should have its HQ plus extra locations"
+            "SELECT COUNT(*) FROM locations WHERE company_id = ?", (cid,)
+        ).fetchone()[0]
+        assert locs >= 2, f"{name} should have its HQ plus extra locations"
     conn.close()
+
+
+def test_bootstrap_admin_exists_and_is_superuser(db_path):
+    conn = sqlite3.connect(str(db_path))
+    row = conn.execute(
+        "SELECT email, is_active, is_superuser, is_verified FROM users WHERE email = 'admin@localhost'"
+    ).fetchone()
+    conn.close()
+    assert row is not None
+    assert row == ("admin@localhost", 1, 1, 1)
+
+
+def test_sessions_table_is_gone_and_access_tokens_present(db_path):
+    conn = sqlite3.connect(str(db_path))
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    assert "sessions" not in tables
+    assert "access_tokens" in tables
+    assert "oauth_accounts" in tables
