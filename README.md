@@ -243,11 +243,13 @@ includes:
   news, and artifacts)
 - `PUT /api/companies/{id}` — full-replace update
 - `DELETE /api/companies/{id}` — delete a company (cascades to its artifacts)
-- `GET /api/companies/{id}/locations`, `POST`, `PUT /api/companies/{id}/locations/{location_id}`,
-  `DELETE` — manage a company's locations
-- `GET /api/companies/{id}/references`, `POST`, `PUT`/`DELETE` per reference —
-  manage references
-- `GET /api/companies/{id}/news`, `POST`, `PUT`/`DELETE` per article — manage news
+- `POST /api/companies/{id}/locations`, `PUT /api/companies/{id}/locations/{location_id}`,
+  `DELETE` — manage a company's locations; the company profile supplies the
+  current location list
+- `POST /api/companies/{id}/references`, `PUT`/`DELETE` per reference — manage
+  references; the company profile supplies the current reference list
+- `POST /api/companies/{id}/news`, `PUT`/`DELETE` per article — manage news;
+  the company profile supplies the current news list
 - `POST /api/companies/{id}/logo`, `DELETE /api/companies/{id}/logo` — set/remove
   the company logo
 - `GET /api/industries`, `POST`, `PUT /api/industries/{id}` — manage the
@@ -260,6 +262,44 @@ includes:
 - `POST /api/companies/{id}/documents/generate` — generate a PDF summary
 
 Interactive API docs are available at `/docs` (OpenAPI).
+
+## OpenCode automation
+
+The repository includes OpenCode tools in `opencode/.opencode/tools/` and
+task-specific agents in `opencode/.opencode/agents/`. They use the same
+authenticated Company Hub API as the SPA.
+
+The backend creates an `agent@localhost` account with **user** access. Set
+`COMPANY_HUB_AGENT_PASSWORD` for its credential; the tools use that account by
+default and authenticate with `get_token`. `COMPANY_HUB_AGENT_EMAIL` may select
+another account, and `COMPANY_HUB_API_URL` may override the default API base of
+`http://localhost:8000`.
+
+### Tools
+
+- **Authenticate and discover:** `get_token`, `get_companies`, and
+  `get_industries`.
+- **Read a profile:** `get_company_details`, `get_company_locations`,
+  `get_company_references`, `get_company_news`, `get_company_logo`, and
+  `get_company_files`.
+- **Create or enrich a profile:** `add_company`, `add_company_details`,
+  `add_company_location`, `add_company_reference`, `add_company_news`,
+  `add_company_logo`, and `add_company_file`.
+
+`add_company_details` is merge-safe: it reads the current profile first and
+updates only the supplied structured fields, retaining existing values for all
+other fields. `add_company_logo` takes a direct image URL, downloads the image,
+and uploads it through the existing Company Hub logo endpoint. `add_company_file`
+uploads a file from a local path.
+
+### Agents
+
+- `source_news` takes `company_id` and `number_of_new_items` (1–5). It checks
+  current news, finds credible recent coverage, skips duplicates, and adds each
+  verified article separately.
+- `source_company` takes `company_name`. It finds or creates the company,
+  researches and enriches its profile, locations, references, and official logo,
+  then adds up to five verified, non-duplicate news items.
 
 ## Implementation summary
 
