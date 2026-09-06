@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth.roles import require_access
 from backend.config import utc_now
 from backend.db.session import get_session
 from backend.models.artifact import Artifact
@@ -63,7 +64,9 @@ async def _logo_bytes(session: AsyncSession, company_id: int) -> bytes | None:
 
 @router.post("/companies/{company_id}/documents/generate", status_code=201)
 async def generate_document(
-    company_id: int, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_access("user")),
 ):
     company = await session.get(Company, company_id)
     if company is None:

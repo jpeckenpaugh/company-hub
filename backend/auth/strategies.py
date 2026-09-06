@@ -17,7 +17,7 @@ from fastapi_users.authentication.strategy.db import AccessTokenDatabase, Databa
 from fastapi_users.authentication.transport.cookie import CookieTransport
 
 from backend.auth.db import get_access_token_db
-from backend.config import session_ttl_seconds
+from backend.config import secure_cookies, session_ttl_seconds
 
 COOKIE_NAME = "session"
 
@@ -35,14 +35,15 @@ def get_cookie_transport() -> CookieTransport:
     """A CookieTransport configured for the current session lifetime.
 
     Built per request so the cookie ``Max-Age`` always matches the effective
-    ``COMPANY_HUB_SESSION_TTL``.
+    ``COMPANY_HUB_SESSION_TTL`` and the ``Secure`` flag honors
+    ``COMPANY_HUB_SECURE_COOKIES`` (production; default off for dev http).
     """
     return CookieTransport(
         cookie_name=COOKIE_NAME,
         cookie_max_age=session_ttl_seconds(),
         cookie_path="/",
         cookie_domain=None,
-        cookie_secure=False,
+        cookie_secure=secure_cookies(),
         cookie_httponly=True,
         cookie_samesite="lax",
     )

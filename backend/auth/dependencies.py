@@ -1,10 +1,10 @@
-"""Auth gate dependencies backed by the fastapi-users components.
+"""Auth gate dependency backed by the fastapi-users components.
 
 Every protected ``/api/`` route resolves the ``session`` cookie through the
 ``DatabaseStrategy`` (``access_tokens`` → ``users``); a missing/invalid/expired
-session yields the contracted ``401 {"detail": "Not authenticated"}``. The
-superuser variant adds the contracted ``403 {"detail": "Not enough
-permissions"}`` for authenticated non-superusers.
+session — or a deactivated account — yields the contracted ``401 {"detail":
+"Not authenticated"}``. Level-based authorization (``403``) lives in
+``backend/auth/roles.py`` (``require_access`` / ``get_current_admin``).
 """
 
 from fastapi import Depends, HTTPException, status
@@ -26,12 +26,4 @@ async def get_current_user(
     user = await strategy.read_token(token, user_manager)
     if user is None or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
-    return user
-
-
-async def get_current_superuser(user: User = Depends(get_current_user)) -> User:
-    if not user.is_superuser:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="Not enough permissions"
-        )
     return user

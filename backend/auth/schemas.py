@@ -1,17 +1,23 @@
 """Pydantic serializers for the fastapi-users wiring.
 
 ``UserRead`` exposes exactly the contracted ``me`` payload
-(``{id, email, is_superuser}``); ``UserCreate`` is the superuser-only account
-creation body; ``UserUpdate`` limits self-service profile updates to the
-password.
+(``{id, email, access_level}``); ``UserCreate`` is the admin-only account
+creation body; ``UserManagementRead`` is the admin user-management payload
+(``{id, email, access_level, is_active}``); ``UserManagementUpdate`` is the
+admin level/active mutation body; ``UserUpdate`` limits self-service profile
+updates to the password.
 
 Email is carried as ``str`` (not Pydantic ``EmailStr``) because the bootstrap
 admin address ``admin@localhost`` has a dot-less domain that ``email-validator``
 rejects; a light shape check (non-empty, contains ``@``) replaces it.
 """
 
+from typing import Literal
+
 from fastapi_users.schemas import BaseUserCreate, CreateUpdateDictModel
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+AccessLevel = Literal["guest", "read-only", "user", "admin"]
 
 
 def _validate_email(value: str) -> str:
@@ -24,9 +30,23 @@ def _validate_email(value: str) -> str:
 class UserRead(BaseModel):
     id: int
     email: str
-    is_superuser: bool
+    access_level: str
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserManagementRead(BaseModel):
+    id: int
+    email: str
+    access_level: str
+    is_active: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UserManagementUpdate(BaseModel):
+    access_level: AccessLevel | None = None
+    is_active: bool | None = None
 
 
 class UserUpdate(CreateUpdateDictModel):
@@ -36,8 +56,8 @@ class UserUpdate(CreateUpdateDictModel):
 class UserCreate(BaseUserCreate):
     email: str
     password: str = Field(min_length=8)
+    access_level: AccessLevel
     is_active: bool | None = True
-    is_superuser: bool | None = False
     is_verified: bool | None = True
 
     @field_validator("email")
@@ -49,8 +69,8 @@ class UserCreate(BaseUserCreate):
         return {
             "email": self.email,
             "password": self.password,
+            "access_level": self.access_level,
             "is_active": True if self.is_active is None else self.is_active,
-            "is_superuser": False if self.is_superuser is None else self.is_superuser,
             "is_verified": True if self.is_verified is None else self.is_verified,
         }
 

@@ -58,7 +58,7 @@ async def bootstrap_admin() -> None:
                 "email": ADMIN_EMAIL,
                 "hashed_password": hashed,
                 "is_active": True,
-                "is_superuser": True,
+                "access_level": "admin",
                 "is_verified": True,
                 "created_at": utc_now(),
             }

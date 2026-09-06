@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.auth.dependencies import get_current_user
+from backend.auth.roles import require_access
 from backend.config import utc_now
 from backend.db.session import get_session
 from backend.models.company import Company
@@ -20,6 +20,8 @@ from backend.schemas import ReferenceIn
 from backend.serializers import reference_to_dict
 
 router = APIRouter(tags=["references"])
+
+require_user = require_access("user")
 
 _EDITABLE_FIELDS = ("title", "url", "description")
 
@@ -47,7 +49,7 @@ async def create_reference(
     company_id: int,
     payload: ReferenceIn,
     session: AsyncSession = Depends(get_session),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     now = utc_now()
@@ -72,6 +74,7 @@ async def update_reference(
     reference_id: int,
     payload: ReferenceIn,
     session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     reference = await _fetch_reference(session, company_id, reference_id)
@@ -88,6 +91,7 @@ async def delete_reference(
     company_id: int,
     reference_id: int,
     session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     reference = await _fetch_reference(session, company_id, reference_id)

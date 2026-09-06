@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth.roles import require_access
 from backend.db.session import get_session
 from backend.models.company import Company, Location
 from backend.models.country import Country
@@ -17,6 +18,8 @@ from backend.schemas import LocationIn
 from backend.serializers import location_to_dict
 
 router = APIRouter(tags=["locations"])
+
+require_user = require_access("user")
 
 
 async def _fetch_company(session: AsyncSession, company_id: int) -> None:
@@ -66,7 +69,10 @@ async def _location_payload(session: AsyncSession, location: Location) -> dict:
 
 @router.post("/companies/{company_id}/locations", status_code=201)
 async def create_location(
-    company_id: int, payload: LocationIn, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    payload: LocationIn,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     await _validate_country(session, payload.country_code)
@@ -92,6 +98,7 @@ async def update_location(
     location_id: int,
     payload: LocationIn,
     session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     await _fetch_location(session, company_id, location_id)
@@ -114,6 +121,7 @@ async def delete_location(
     company_id: int,
     location_id: int,
     session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     location = await _fetch_location(session, company_id, location_id)

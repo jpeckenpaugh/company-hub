@@ -64,14 +64,14 @@ def test_seed_has_references_news_locations_and_logos(db_path):
     conn.close()
 
 
-def test_bootstrap_admin_exists_and_is_superuser(db_path):
+def test_bootstrap_admin_exists_and_is_admin(db_path):
     conn = sqlite3.connect(str(db_path))
     row = conn.execute(
-        "SELECT email, is_active, is_superuser, is_verified FROM users WHERE email = 'admin@localhost'"
+        "SELECT email, is_active, access_level, is_verified FROM users WHERE email = 'admin@localhost'"
     ).fetchone()
     conn.close()
     assert row is not None
-    assert row == ("admin@localhost", 1, 1, 1)
+    assert row == ("admin@localhost", 1, "admin", 1)
 
 
 def test_sessions_table_is_gone_and_access_tokens_present(db_path):

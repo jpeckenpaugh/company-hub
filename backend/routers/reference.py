@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth.roles import require_access
 from backend.db.session import get_session
 from backend.models.country import Country
 
@@ -14,7 +15,10 @@ router = APIRouter(prefix="/countries", tags=["countries"])
 
 
 @router.get("")
-async def list_countries(session: AsyncSession = Depends(get_session)):
+async def list_countries(
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_access("read-only")),
+):
     rows = (
         await session.scalars(
             select(Country).order_by(func.lower(Country.name), Country.name)

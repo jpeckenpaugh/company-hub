@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import false, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth.roles import require_access
 from backend.config import utc_now
 from backend.db.session import get_session
 from backend.models.artifact import Artifact
@@ -31,6 +32,9 @@ from backend.serializers import (
 from backend.services import storage
 
 router = APIRouter(prefix="/companies", tags=["companies"])
+
+require_read_only = require_access("read-only")
+require_user = require_access("user")
 
 _COMPANY_FIELDS = (
     "name",
@@ -135,6 +139,7 @@ async def list_companies(
     q: str | None = None,
     countries: str | None = None,
     session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_read_only),
 ):
     stmt = select(Company)
     if q:
@@ -162,7 +167,11 @@ async def list_companies(
 
 
 @router.post("", status_code=201)
-async def create_company(payload: CompanyIn, session: AsyncSession = Depends(get_session)):
+async def create_company(
+    payload: CompanyIn,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
+):
     await _validate_industry(session, payload.industry_id)
     company = Company(created_at=utc_now(), updated_at=utc_now())
     _apply_company_fields(company, payload)
@@ -174,7 +183,11 @@ async def create_company(payload: CompanyIn, session: AsyncSession = Depends(get
 
 
 @router.get("/{company_id}")
-async def get_company(company_id: int, session: AsyncSession = Depends(get_session)):
+async def get_company(
+    company_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_read_only),
+):
     company = await _fetch_company(session, company_id)
     counts, industry_map, hq_map, logo_map = await _items_for(session, [company_id])
     data = _item(company, counts, industry_map, hq_map, logo_map)
@@ -222,7 +235,10 @@ async def get_company(company_id: int, session: AsyncSession = Depends(get_sessi
 
 @router.put("/{company_id}")
 async def update_company(
-    company_id: int, payload: CompanyIn, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    payload: CompanyIn,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     company = await _fetch_company(session, company_id)
     await _validate_industry(session, payload.industry_id)
@@ -235,7 +251,11 @@ async def update_company(
 
 
 @router.delete("/{company_id}", status_code=204)
-async def delete_company(company_id: int, session: AsyncSession = Depends(get_session)):
+async def delete_company(
+    company_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
+):
     company = await _fetch_company(session, company_id)
     await session.delete(company)
     await session.commit()

@@ -54,6 +54,37 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def secure_cookies() -> bool:
+    """Whether session and OAuth cookies should be ``Secure``.
+
+    ``COMPANY_HUB_SECURE_COOKIES=1`` enables the production secure default;
+    the default (off) keeps cookies non-Secure so the SSO flow works over plain
+    HTTP on localhost (Brief 03 item 7).
+    """
+    return os.environ.get("COMPANY_HUB_SECURE_COOKIES") == "1"
+
+
+def google_sso_configured() -> bool:
+    """True when both Google OAuth credentials are present (SSO enabled)."""
+    return bool(
+        os.environ.get("COMPANY_HUB_GOOGLE_CLIENT_ID")
+        and os.environ.get("COMPANY_HUB_GOOGLE_CLIENT_SECRET")
+    )
+
+
+def google_sso_state_secret() -> str:
+    """The secret signing the OAuth state token.
+
+    ``COMPANY_HUB_OAUTH_STATE_SECRET`` wins when set; otherwise the Google
+    client secret is used (architecture §10.8 item 11).
+    """
+    return (
+        os.environ.get("COMPANY_HUB_OAUTH_STATE_SECRET")
+        or os.environ.get("COMPANY_HUB_GOOGLE_CLIENT_SECRET")
+        or ""
+    )
+
+
 def ensure_dirs() -> None:
     """Create the runtime storage directories if absent."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)

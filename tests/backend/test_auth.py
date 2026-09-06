@@ -12,7 +12,10 @@ def _protected_requests():
         ("GET", "/api/auth/me"),
         ("PATCH", "/api/auth/me", {"password": "new-password-1"}),
         ("POST", "/api/auth/change-password", {"old_password": "x", "new_password": "new-password-1"}),
-        ("POST", "/api/auth/users", {"email": "a@example.com", "password": "new-password-1"}),
+        ("POST", "/api/auth/users", {"email": "a@example.com", "password": "new-password-1", "access_level": "user"}),
+        ("GET", "/api/auth/users"),
+        ("PATCH", "/api/auth/users/1", {"access_level": "read-only"}),
+        ("DELETE", "/api/auth/users/1"),
         ("GET", "/api/industries"),
         ("POST", "/api/industries", {"name": "X"}),
         ("PUT", "/api/industries/1", {"name": "X"}),
@@ -100,7 +103,7 @@ def test_me_returns_contracted_shape(client, admin_password):
     )
     r = client.get("/api/auth/me")
     assert r.status_code == 200
-    assert r.json() == {"id": 1, "email": ADMIN_EMAIL, "is_superuser": True}
+    assert r.json() == {"id": 1, "email": ADMIN_EMAIL, "access_level": "admin"}
 
 
 def test_logout_is_idempotent_and_revokes_immediately(client, admin_password):
@@ -170,11 +173,11 @@ def test_superuser_creates_account_that_can_sign_in(client, admin_password):
     )
     r = client.post(
         "/api/auth/users",
-        json={"email": "alice@example.com", "password": "alice-pass-123"},
+        json={"email": "alice@example.com", "password": "alice-pass-123", "access_level": "user"},
     )
     assert r.status_code == 201
     created = r.json()
-    assert created == {"id": 2, "email": "alice@example.com", "is_superuser": False}
+    assert created == {"id": 2, "email": "alice@example.com", "access_level": "user"}
 
     client.post("/api/auth/logout")
     alice = client.post(
@@ -182,7 +185,7 @@ def test_superuser_creates_account_that_can_sign_in(client, admin_password):
     )
     assert alice.status_code == 200
     me = client.get("/api/auth/me")
-    assert me.json() == {"id": 2, "email": "alice@example.com", "is_superuser": False}
+    assert me.json() == {"id": 2, "email": "alice@example.com", "access_level": "user"}
     assert client.get("/api/companies").status_code == 200
 
 
@@ -193,12 +196,12 @@ def test_duplicate_email_400(client, admin_password):
     )
     r = client.post(
         "/api/auth/users",
-        json={"email": "alice@example.com", "password": "alice-pass-123"},
+        json={"email": "alice@example.com", "password": "alice-pass-123", "access_level": "user"},
     )
     assert r.status_code == 201
     r = client.post(
         "/api/auth/users",
-        json={"email": "alice@example.com", "password": "alice-pass-123"},
+        json={"email": "alice@example.com", "password": "alice-pass-123", "access_level": "user"},
     )
     assert r.status_code == 400
     assert r.json() == {"detail": "REGISTER_USER_ALREADY_EXISTS"}
@@ -212,14 +215,21 @@ def test_create_account_bad_email_or_password_422(client, admin_password):
     assert (
         client.post(
             "/api/auth/users",
-            json={"email": "not-an-email", "password": "alice-pass-123"},
+            json={"email": "not-an-email", "password": "alice-pass-123", "access_level": "user"},
         ).status_code
         == 422
     )
     assert (
         client.post(
             "/api/auth/users",
-            json={"email": "bob@example.com", "password": "short"},
+            json={"email": "bob@example.com", "password": "short", "access_level": "user"},
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            "/api/auth/users",
+            json={"email": "bob@example.com", "password": "bob-pass-123", "access_level": "super-admin"},
         ).status_code
         == 422
     )
@@ -232,7 +242,7 @@ def test_non_superuser_cannot_create_accounts(client, admin_password):
     )
     client.post(
         "/api/auth/users",
-        json={"email": "alice@example.com", "password": "alice-pass-123"},
+        json={"email": "alice@example.com", "password": "alice-pass-123", "access_level": "user"},
     )
     client.post("/api/auth/logout")
     client.post(
@@ -240,10 +250,10 @@ def test_non_superuser_cannot_create_accounts(client, admin_password):
     )
     r = client.post(
         "/api/auth/users",
-        json={"email": "carol@example.com", "password": "carol-pass-123"},
+        json={"email": "carol@example.com", "password": "carol-pass-123", "access_level": "user"},
     )
     assert r.status_code == 403
-    assert r.json() == {"detail": "Not enough permissions"}
+    assert r.json() == {"detail": "Insufficient access level"}
 
 
 def test_session_expires_after_lifetime(client, admin_password, monkeypatch, db_path):

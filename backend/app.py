@@ -14,10 +14,12 @@ the SPA itself renders the login view when unauthenticated.
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from backend.auth import bootstrap_admin, get_current_user
+from backend.auth import bootstrap_admin
+from backend.auth.oauth import get_google_oauth_router
+from backend.auth.providers import router as providers_router
 from backend.auth.routers import router as auth_router
 from backend.config import FRONTEND_DIR, ensure_dirs
 from backend.db.engine import get_sessionmaker, run_migrations
@@ -51,8 +53,12 @@ app = FastAPI(
 )
 
 app.include_router(auth_router, prefix="/api")
+app.include_router(providers_router, prefix="/api")
 
-_protected = [Depends(get_current_user)]
+google_oauth_router = get_google_oauth_router()
+if google_oauth_router is not None:
+    app.include_router(google_oauth_router, prefix="/api")
+
 for router in (
     industries.router,
     reference.router,
@@ -63,7 +69,7 @@ for router in (
     artifacts.router,
     documents.router,
 ):
-    app.include_router(router, prefix="/api", dependencies=_protected)
+    app.include_router(router, prefix="/api")
 
 if FRONTEND_DIR.is_dir():
     app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

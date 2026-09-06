@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth.roles import require_access
 from backend.config import utc_now
 from backend.db.session import get_session
 from backend.models.artifact import Artifact
@@ -25,6 +26,9 @@ from backend.serializers import artifact_to_dict
 from backend.services import storage
 
 router = APIRouter(tags=["artifacts"])
+
+require_read_only = require_access("read-only")
+require_user = require_access("user")
 
 
 async def _fetch_company(session: AsyncSession, company_id: int) -> None:
@@ -48,7 +52,10 @@ def _require_filename(file: UploadFile) -> None:
 
 @router.post("/companies/{company_id}/artifacts", status_code=201)
 async def upload_artifact(
-    company_id: int, file: UploadFile, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    file: UploadFile,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     _require_filename(file)
     content = await file.read()
@@ -76,7 +83,9 @@ async def upload_artifact(
 
 @router.get("/companies/{company_id}/artifacts")
 async def list_artifacts(
-    company_id: int, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_read_only),
 ):
     await _fetch_company(session, company_id)
     rows = (
@@ -91,7 +100,9 @@ async def list_artifacts(
 
 @router.get("/artifacts/{artifact_id}/content")
 async def download_artifact(
-    artifact_id: int, session: AsyncSession = Depends(get_session)
+    artifact_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_read_only),
 ):
     artifact = await _fetch_artifact(session, artifact_id)
     path = storage.read(artifact.company_id, artifact.stored_filename)
@@ -106,7 +117,9 @@ async def download_artifact(
 
 @router.delete("/artifacts/{artifact_id}", status_code=204)
 async def delete_artifact(
-    artifact_id: int, session: AsyncSession = Depends(get_session)
+    artifact_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     artifact = await _fetch_artifact(session, artifact_id)
     company_id, stored_filename = artifact.company_id, artifact.stored_filename
@@ -118,7 +131,10 @@ async def delete_artifact(
 
 @router.post("/companies/{company_id}/logo", status_code=201)
 async def upload_logo(
-    company_id: int, file: UploadFile, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    file: UploadFile,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     _require_filename(file)
     if not (file.content_type or "").startswith("image/"):
@@ -167,7 +183,9 @@ async def upload_logo(
 
 @router.delete("/companies/{company_id}/logo", status_code=204)
 async def delete_logo(
-    company_id: int, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     logo = (
         await session.scalars(

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.auth.roles import require_access
 from backend.config import utc_now
 from backend.db.session import get_session
 from backend.models.company import Company
@@ -17,6 +18,8 @@ from backend.schemas import NewsIn
 from backend.serializers import news_to_dict
 
 router = APIRouter(tags=["news"])
+
+require_user = require_access("user")
 
 _EDITABLE_FIELDS = ("title", "source", "url", "published_at", "summary")
 
@@ -47,7 +50,10 @@ def _scraped_flag(payload: NewsIn, current: bool | None = None) -> bool:
 
 @router.post("/companies/{company_id}/news", status_code=201)
 async def create_news(
-    company_id: int, payload: NewsIn, session: AsyncSession = Depends(get_session)
+    company_id: int,
+    payload: NewsIn,
+    session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     now = utc_now()
@@ -74,6 +80,7 @@ async def update_news(
     news_id: int,
     payload: NewsIn,
     session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     existing = await _fetch_news(session, company_id, news_id)
@@ -91,6 +98,7 @@ async def delete_news(
     company_id: int,
     news_id: int,
     session: AsyncSession = Depends(get_session),
+    _: None = Depends(require_user),
 ):
     await _fetch_company(session, company_id)
     article = await _fetch_news(session, company_id, news_id)
