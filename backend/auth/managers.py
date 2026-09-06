@@ -41,17 +41,29 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
 
 
 async def bootstrap_admin() -> None:
-    """Create ``admin@localhost`` if and only if it does not already exist."""
+    """Ensure ``admin@localhost`` exists with the configured password.
+
+    When ``COMPANY_HUB_ADMIN_PASSWORD`` is set it is enforced deterministically:
+    the admin is created with that password if absent, or its password is
+    updated to match if the account already exists. When the variable is unset,
+    an existing account is left untouched and a missing one is created with a
+    fresh complex password generated and printed once.
+    """
     from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 
     async with get_sessionmaker()() as session:
         user_db = SQLAlchemyUserDatabase(session, User)
         existing = await user_db.get_by_email(ADMIN_EMAIL)
+        from_env = bool(os.environ.get("COMPANY_HUB_ADMIN_PASSWORD"))
+        password = os.environ.get("COMPANY_HUB_ADMIN_PASSWORD")
+
         if existing is not None:
+            if from_env:
+                existing.hashed_password = UserManager(user_db).password_helper.hash(password)
+                await session.commit()
             return
 
-        from_env = bool(os.environ.get("COMPANY_HUB_ADMIN_PASSWORD"))
-        password = os.environ.get("COMPANY_HUB_ADMIN_PASSWORD") or secrets.token_urlsafe(24)
+        password = password or secrets.token_urlsafe(24)
         hashed = UserManager(user_db).password_helper.hash(password)
         await user_db.create(
             {
