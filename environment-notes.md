@@ -29,8 +29,10 @@
 | `sqlalchemy[asyncio]`          | Maintained ORM (Sprint 02, scope **a**); async-native persistence       |
 | `alembic`                      | Versioned schema migrations (Sprint 02, scope **b**)                    |
 | `aiosqlite`                    | Async SQLite driver backing async SQLAlchemy (scope **d**)              |
-| `fastapi-users[sqlalchemy]`    | Maintained auth library (Sprint 02, scope **f**); `[sqlalchemy]` extra only, no `[oauth]` this sprint |
+| `fastapi-users[sqlalchemy,oauth]` | Maintained auth library (Sprint 02, scope **f**); `[oauth]` extra enabled in Sprint 03 for Google SSO (Brief 03) |
 | `fastapi-users-db-sqlalchemy`  | SQLAlchemy adapter pulled by the `fastapi-users[sqlalchemy]` extra      |
+| `httpx-oauth`                  | Google OAuth2 client flow used by the `[oauth]` extra (Sprint 03, Brief 03) |
+| `httpx`                        | HTTP client required by `httpx-oauth`; also the client used by FastAPI's `TestClient` (runtime since Sprint 03; was dev-only before) |
 | `pwdlib[argon2,bcrypt]`        | Password hashing backend used by fastapi-users (replaces hand-rolled PBKDF2) |
 | `email-validator`              | Required by fastapi-users for email validation                         |
 | `makefun`                      | Required by fastapi-users (route generation)                           |
@@ -126,3 +128,30 @@ rm -f data/company_hub.db && rm -rf data/artifacts
 After this baseline, schema changes are applied as versioned migrations, not
 destroy-and-reseed (scope **b**). `data/` is gitignored, so no repository
 history is affected.
+
+## Sprint 03 — Google SSO environment (Stage 5/6 note)
+
+Sprint 03 adds an optional **Sign in with Google** flow (Brief 03). SSO is
+config-driven: it is active only when the credentials below are present, and
+otherwise the app is fully self-contained (email/password only). The feature
+uses the `[oauth]` extra of `fastapi-users` (`httpx-oauth`), which makes `httpx`
+a runtime dependency.
+
+OAuth configuration is read from environment variables. Secrets are never
+committed (`.env` is gitignored):
+
+| Variable                             | Purpose                                                 |
+|--------------------------------------|---------------------------------------------------------|
+| `COMPANY_HUB_GOOGLE_CLIENT_ID`       | Google OAuth client ID; presence enables the SSO option |
+| `COMPANY_HUB_GOOGLE_CLIENT_SECRET`   | Google OAuth client secret                               |
+
+Dev redirect URI to register in the Google OAuth console ("Authorized redirect
+URIs"): `http://127.0.0.1:8000/api/auth/callback`. Local development may run
+the SSO flow over plain HTTP (dev-only relaxation of the secure-cookie default,
+Brief 03 item 7); production keeps the secure default. The exact callback path
+is finalized by the Architect/Backend stages and must match the console entry.
+
+No DB flush is needed for Sprint 03: the `oauth_accounts` table already exists
+from Sprint 02 (schema-only), and the users access-level column is added by a
+normal Alembic migration. Schema changes continue to be applied as versioned
+migrations, not destroy-and-reseed.
