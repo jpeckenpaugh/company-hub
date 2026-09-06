@@ -5,7 +5,7 @@ temperature: 0.15
 permission:
   "*": deny
   websearch: allow
-  get_token: allow
+  get_*: allow
   bash: deny
   edit: deny
 ---
