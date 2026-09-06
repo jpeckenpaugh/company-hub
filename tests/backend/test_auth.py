@@ -177,7 +177,7 @@ def test_superuser_creates_account_that_can_sign_in(client, admin_password):
     )
     assert r.status_code == 201
     created = r.json()
-    assert created == {"id": 2, "email": "alice@example.com", "access_level": "user"}
+    assert created == {"id": 3, "email": "alice@example.com", "access_level": "user"}
 
     client.post("/api/auth/logout")
     alice = client.post(
@@ -185,7 +185,7 @@ def test_superuser_creates_account_that_can_sign_in(client, admin_password):
     )
     assert alice.status_code == 200
     me = client.get("/api/auth/me")
-    assert me.json() == {"id": 2, "email": "alice@example.com", "access_level": "user"}
+    assert me.json() == {"id": 3, "email": "alice@example.com", "access_level": "user"}
     assert client.get("/api/companies").status_code == 200
 
 

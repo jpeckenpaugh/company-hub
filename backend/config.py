@@ -27,6 +27,7 @@ else:
     ARTIFACTS_DIR = DATA_DIR / "artifacts"
 
 ADMIN_EMAIL = "admin@localhost"
+AGENT_EMAIL = "agent@localhost"
 
 DEFAULT_SESSION_TTL = 7 * 24 * 60 * 60  # 604800 seconds (7 days)
 

@@ -15,7 +15,7 @@ from fastapi_users import exceptions
 from fastapi_users.manager import BaseUserManager, IntegerIDMixin
 
 from backend.auth.schemas import UserCreate
-from backend.config import ADMIN_EMAIL, utc_now
+from backend.config import ADMIN_EMAIL, AGENT_EMAIL, utc_now
 from backend.db.engine import get_sessionmaker
 from backend.models.user import User
 
@@ -40,43 +40,58 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             )
 
 
-async def bootstrap_admin() -> None:
-    """Ensure ``admin@localhost`` exists with the configured password.
+async def _ensure_user(
+    session, user_db, email: str, password_env: str, access_level: str, label: str
+) -> None:
+    """Create a user idempotently, enforcing ``password_env`` when set.
 
-    When ``COMPANY_HUB_ADMIN_PASSWORD`` is set it is enforced deterministically:
-    the admin is created with that password if absent, or its password is
-    updated to match if the account already exists. When the variable is unset,
-    an existing account is left untouched and a missing one is created with a
-    fresh complex password generated and printed once.
+    When the ``*_PASSWORD`` env var is set the credential is enforced
+    deterministically (created with it if absent, reset to it if present).
+    When it is unset, an existing account is left untouched and a missing one
+    is created with a fresh complex password generated and printed once.
+    """
+    existing = await user_db.get_by_email(email)
+    from_env = bool(os.environ.get(password_env))
+    password = os.environ.get(password_env)
+
+    if existing is not None:
+        if from_env:
+            existing.hashed_password = UserManager(user_db).password_helper.hash(password)
+            await session.commit()
+        return
+
+    password = password or secrets.token_urlsafe(24)
+    hashed = UserManager(user_db).password_helper.hash(password)
+    await user_db.create(
+        {
+            "email": email,
+            "hashed_password": hashed,
+            "is_active": True,
+            "access_level": access_level,
+            "is_verified": True,
+            "created_at": utc_now(),
+        }
+    )
+    if not from_env:
+        print(
+            f"\nCompany Hub {label} login -> email: {email}  password: {password}\n",
+            flush=True,
+        )
+
+
+async def bootstrap_admin() -> None:
+    """Ensure the bootstrap accounts exist with the configured passwords.
+
+    Creates ``admin@localhost`` (admin) and ``agent@localhost`` (user), each
+    governed by its own ``COMPANY_HUB_*_PASSWORD`` env var.
     """
     from fastapi_users_db_sqlalchemy import SQLAlchemyUserDatabase
 
     async with get_sessionmaker()() as session:
         user_db = SQLAlchemyUserDatabase(session, User)
-        existing = await user_db.get_by_email(ADMIN_EMAIL)
-        from_env = bool(os.environ.get("COMPANY_HUB_ADMIN_PASSWORD"))
-        password = os.environ.get("COMPANY_HUB_ADMIN_PASSWORD")
-
-        if existing is not None:
-            if from_env:
-                existing.hashed_password = UserManager(user_db).password_helper.hash(password)
-                await session.commit()
-            return
-
-        password = password or secrets.token_urlsafe(24)
-        hashed = UserManager(user_db).password_helper.hash(password)
-        await user_db.create(
-            {
-                "email": ADMIN_EMAIL,
-                "hashed_password": hashed,
-                "is_active": True,
-                "access_level": "admin",
-                "is_verified": True,
-                "created_at": utc_now(),
-            }
+        await _ensure_user(
+            session, user_db, ADMIN_EMAIL, "COMPANY_HUB_ADMIN_PASSWORD", "admin", "admin"
         )
-        if not from_env:
-            print(
-                f"\nCompany Hub admin login -> email: {ADMIN_EMAIL}  password: {password}\n",
-                flush=True,
-            )
+        await _ensure_user(
+            session, user_db, AGENT_EMAIL, "COMPANY_HUB_AGENT_PASSWORD", "user", "agent"
+        )
