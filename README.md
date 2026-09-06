@@ -102,6 +102,37 @@ Sprint 02 added:
   (Google-oriented) so external-identity-provider login can be added in a later
   sprint without a data-model change; no OAuth login routes exist yet.
 
+Sprint 03 added:
+
+- **Role-based access** — each account carries one of four access levels:
+  **guest**, **read-only**, **user**, or **admin** (admin = superuser),
+  replacing the single `is_superuser` boolean (applied via a versioned Alembic
+  migration; the `oauth_accounts` table is consumed as-is). `me` now returns
+  `{id, email, access_level}`. The UI and API respect the level: guests are
+  authenticated but see a blocked "Access pending" view (no data access); read-only
+  users can view and download but not create/edit/delete; users have the current
+  full view/edit access; admins additionally get account management. Denials are
+  `403 {"detail":"Insufficient access level"}` and keep the session.
+- **Admin user management** — an admin can list all accounts with their level and
+  active state, create accounts (email + initial password + level), change a
+  level, activate/deactivate, and delete. It is admin-only (hidden from and denied
+  to non-admins). Safeguards protect the system: the bootstrap admin is immutable
+  (cannot be demoted, deactivated, or deleted), an admin cannot change its own
+  level, and a last-remaining-admin backstop is enforced.
+- **Google sign-in (SSO)** — an optional "Sign in with Google" alternative to
+  email/password. SSO is config-driven (active only when OAuth credentials are
+  provided via environment variables; the app works fully self-contained
+  otherwise and the button appears on the login screen only when enabled). A
+  Google sign-in authenticates the user, establishes the same cookie session as
+  email/password, links the Google identity to the account, and auto-provisions a
+  **guest** account when the email is unknown (an admin then elevates it). Google
+  is the only external provider; local dev may run SSO over plain HTTP.
+  End-to-end sign-in is verified **manually** against real Google credentials
+  (not automated).
+- **Sign-in page navigation fix** — the entire top navigation bar (brand, menu
+  links, and toggler) is hidden when no user is signed in and appears only once an
+  authenticated session exists.
+
 ## Requirements
 
 - A Python 3.11+ interpreter named `python3.12` or `python3.11` on `PATH`
@@ -132,8 +163,10 @@ the pinned dependencies from `requirements.txt`.
 password. The password is created once and **persisted** — it is **not**
 re-randomized on subsequent restarts (the `COMPANY_HUB_ADMIN_PASSWORD`
 environment override, used by the test suites, sets it deterministically
-instead). The whole application (all `/api` routes) requires an authenticated
-session, so you will be asked to log in on first use.
+instead). The bootstrap admin is an **admin** (full access, including user
+management). The whole application (all `/api` routes) requires an authenticated
+session, so you will be asked to log in on first use; what an authenticated
+account can then see and do depends on its `access_level` (see Features).
 
 On first start the backend creates the SQLite database under `data/` and seeds
 it with the standard data: six industries, the standard 83-entry country list,
@@ -177,18 +210,32 @@ order, and seeding still runs only on an empty `companies` table.
 ## API
 
 The REST API lives under `/api`. Every route requires an authenticated session
-except `POST /api/auth/login` (unauthenticated `/api` calls return `401`). It
+except `POST /api/auth/login` and `GET /api/auth/providers` (unauthenticated
+`/api` calls return `401`). Beyond authentication, most data routes are
+role-gated: reads require **read-only** or higher, writes and document
+generation require **user** or higher, and user management requires **admin**
+(out-of-level calls return `403 {"detail":"Insufficient access level"}`). It
 includes:
 
 - `POST /api/auth/login` — sign in with `{email, password}`; returns
   `200 {access_token, token_type:"bearer"}` plus an HttpOnly `session` cookie
-- `GET /api/auth/me` — the current user `{id, email, is_superuser}`
+- `GET /api/auth/providers` — public; `{google:bool}` reflecting whether SSO is
+  enabled
+- `GET /api/auth/authorize`, `GET /api/auth/callback` — Google SSO flow
+  (mounted only when Google credentials are configured); `/callback` establishes
+  the same cookie session and redirects to `/`
+- `GET /api/auth/me` — the current user `{id, email, access_level}`
 - `POST /api/auth/logout` — sign out; revokes the session server-side (idempotent
   `204`)
 - `POST /api/auth/change-password` — change the current user's own password
   (`{old_password, new_password}`, new password ≥ 8 chars)
-- `POST /api/auth/users` — **superuser-only** account creation; no self-service
-  signup route
+- `GET /api/auth/users` — **admin-only** list of all accounts
+  `{id, email, access_level, is_active}`
+- `POST /api/auth/users` — **admin-only** account creation (email + initial
+  password + access level); no self-service signup route
+- `PATCH /api/auth/users/{id}` — **admin-only** change an account's level and/or
+  active state (guardrails protect the bootstrap admin and the last admin)
+- `DELETE /api/auth/users/{id}` — **admin-only** delete an account
 - `GET /api/companies` — list (with optional `?q=` name search and `?countries=`
   multi-country filter)
 - `POST /api/companies` — create a company
@@ -227,13 +274,14 @@ object-storage service (`backend/services/storage.py`) stores bytes under
 artifact metadata only; file bytes live on disk.
 
 The frontend (`frontend/`) is a static Bootstrap SPA — an `index.html` shell, a
-custom stylesheet, and eight ES-module JavaScript files (`app.js`, `api.js`,
-`list.js`, `profile.js`, `form.js`, `login.js`, `industries.js`, `password.js`)
-implementing hash-based routing, the list, profile, add/edit, artifact,
-generate, login, industry-management, and change-password views. Bootstrap and
-Bootstrap Icons are vendored locally, so the app has no runtime network/CDN
-dependency. It is a strict API client with no client-side persistence: every
-view re-fetches from the backend, so the UI always reflects current state.
+custom stylesheet, and nine ES-module JavaScript files (`app.js`, `api.js`,
+`list.js`, `profile.js`, `form.js`, `login.js`, `industries.js`, `password.js`,
+`users.js`) implementing hash-based routing, the list, profile, add/edit,
+artifact, generate, login, industry-management, change-password, and admin
+user-management views. Bootstrap and Bootstrap Icons are vendored locally, so
+the app has no runtime network/CDN dependency. It is a strict API client with no
+client-side persistence: every view re-fetches from the backend, so the UI
+always reflects current state.
 
 **Sprint 01** extended both sides. The backend gained auth (`backend/routers/auth.py`:
 PBKDF2 hashing, DB-backed HttpOnly session cookie, `login`/`me`/`logout`, every
@@ -272,6 +320,22 @@ loop. The hand-rolled `backend/routers/auth.py` and `backend/db.py` were
 removed (superseded). The frontend gained a `password.js` view and a `#/password`
 route (self-service change-password) and re-fetches the current user via `me`
 after login, since the login response is now `{access_token, token_type}`.
+
+**Sprint 03** extended both sides with the role model, admin user management,
+optional Google SSO, and the sign-in nav fix. The backend gained a role module
+(`backend/auth/roles.py` — level ordering and the `require_access` / admin
+dependencies), the four-level `access_level` field (Alembic migration
+`0003_sprint03_roles`, replacing `is_superuser`), an SSO package
+(`backend/auth/providers.py` for the always-mounted `GET /api/auth/providers`
+plus a Google client, and `backend/auth/oauth.py` for the config-driven
+`authorize`/`callback` flow), and admin user-management routes with guardrails
+(immutable bootstrap admin, no self role-change, last-admin backstop). Session
+cookies honor `COMPANY_HUB_SECURE_COOKIES`, and `backend/config.py` exposes the
+SSO/state-secret env helpers. The frontend gained a `users.js` view and `#/users`
+route (admin-only), a whole-`<nav>` hide/show fix (`#nav-bar` hidden when
+unauthenticated), a blocked guest view, role-aware hiding of mutating controls
+for read-only users, friendly `403` handling in `api.js`, and a "Sign in with
+Google" button on the login view when SSO is enabled.
 
 ## Testing
 
@@ -313,8 +377,16 @@ failures across 64 backend `pytest` checks, 36 CDP browser-automation checks
 (incl. a self-service change-password UI flow), and 28 live `curl` checks
 exercising the fastapi-users auth contract (login/me/logout, change-password,
 superuser-only account creation, session expiry + server-side revocation, and a
-non-auth API regression pass). The working tree is clean on `main` and up to
-date with `origin`.
+non-auth API regression pass).
+
+The **Sprint 03** enhancement pass (role-based access, admin user management,
+optional Google SSO, and the sign-in navigation fix) is likewise **complete and
+verified**: PASS with 0 failures across 81 backend `pytest` checks, 36 CDP
+browser-automation checks, and 46 live `curl` checks, with two manual items
+recorded as delivered (the end-to-end Google SSO sign-in, verified manually per
+scope, and the last-admin guardrail, present but unreachable by design). The
+working tree is clean on `main` and up to date with `origin`. See
+`COMPARISON.md` for the feature-set change summaries.
 
 ## Verification results
 
@@ -339,6 +411,15 @@ surface live, plus static review of the frontend rendering logic. See
   expiry via a short-TTL throwaway server, server-side revocation, and a
   non-auth API regression pass), run against throwaway DBs so `data/` was
   untouched.
+- **Sprint 03 (2026-09-05): PASS — 0 failures** — 81 backend `pytest` checks
+  (roles, admin user management incl. guardrails, SSO wiring, plus all non-auth
+  routes/seed), 36 CDP headless-Chrome browser checks (incl. the re-pointed
+  whole-nav hide/show assertions and the admin Users view), and 46 live `curl`
+  checks against two throwaway-DB servers (SSO disabled and enabled) covering
+  the role matrix, user-management guardrails, and the SSO `providers` /
+  `authorize` wiring. The end-to-end Google sign-in is recorded as a **manual**
+  item (scope o, not automated), as is the last-admin guardrail (present but
+  unreachable by design).
 
 Three v0.1 checks pass with notes; these are documented human resolutions from
 earlier stages, not defects (see Known issues below).
@@ -413,12 +494,38 @@ Remaining items:
   fastapi-users compatibility (password-only self-service); the SPA uses the
   dedicated `POST /api/auth/change-password` route instead, and no other profile
   fields are self-editable this sprint.
-- **`oauth_accounts` is schema-only.** The OAuth-ready account table exists with
-  zero rows and no OAuth login routes/SSO behavior; Google SSO is a future
-  sprint.
+- **`oauth_accounts` is schema-only (superseded).** The OAuth-ready account table
+  existed with zero rows and no OAuth login routes/SSO behavior. **Added in
+  Sprint 03:** Google SSO consumes the `oauth_accounts` table as-is to link
+  Google identities to accounts and auto-provision guest accounts (no data-model
+  change was needed).
 - **Stable admin credential.** The bootstrap admin password is now created once
   and persisted across restarts (not re-randomized per startup as in Sprint 01);
   it is only re-generated if the admin account is deleted.
+
+**Sprint 03 additions:**
+
+- **`me` returns `access_level`, not `is_superuser`.** The four-level
+  `access_level` replaced the `is_superuser` boolean (versioned migration
+  `0003_sprint03_roles`); the `me` payload is `{id, email, access_level}`. This
+  is a deliberate, in-scope contract change (scope item s).
+- **Role-gated data access.** Beyond session authentication, data routes are
+  gated by `access_level`: reads require read-only+, writes and document
+  generation require user+, and user management requires admin. Denials return
+  `403 {"detail":"Insufficient access level"}` and keep the session.
+- **SSO is not automated end-to-end.** The full Google sign-in is verified
+  **manually** against real credentials (scope item o); automated checks cover
+  the `providers` endpoint, the config-driven mounting of `authorize`/`callback`,
+  and the `authorize`-issued signed-state URL. Until a human completes a real
+  Google sign-in, SSO should be considered enabled-with-manual-verification.
+- **Last-admin guardrail is present but unreachable.** Because the bootstrap
+  admin is always `admin` and immutable, the last-remaining-admin backstop cannot
+  be triggered through normal operations; the guard code is defensive and not
+  covered by a dedicated test.
+- **`/callback` returns `500` on fabricated input.** Probing the mounted callback
+  with a bogus `code`/`state` under dummy credentials makes the OAuth token
+  exchange fail before the state-validation `400` path runs; only reachable by
+  fabricating input, so it is not a defect for the real flow.
 
 ## Recommended next actions
 
@@ -437,19 +544,29 @@ Remaining items:
   `COMPANY_HUB_ADMIN_PASSWORD` test override alongside the documented
   printed-password flow.
 
-Sprint 02 / future:
+Sprint 03 / future:
 
-- **Google-SSO login.** The `oauth_accounts` schema is in place (Google-oriented)
-  with no OAuth routes yet; a later sprint can mount fastapi-users SSO with no
-  data-model change.
-- **Superuser admin UI.** Account creation exists via the superuser-only
-  `POST /api/auth/users` API but there is no SPA admin view; a future pass could
-  add a minimal user-management screen.
+- **Complete a real Google sign-in end-to-end.** Per scope **o**, the SSO wiring
+  is verified but the full Google flow is only manually confirmed; a human should
+  exercise a real sign-in (including the guest auto-provision → admin elevation
+  path) before production enablement.
+- **Synthetic coverage for the last-admin guardrail.** Add a test that
+  temporarily demotes the bootstrap admin to provoke the last-remaining-admin
+  backstop, if that defensive path needs direct coverage.
+- **Make the SSO callback fail cleanly on fabricated input.** The mounted
+  `/callback` returns `500` on a bogus `code`/`state` (token exchange runs before
+  state validation); validating state before the exchange would yield a clean
+  `400`.
 - **Document the `PATCH /api/auth/me` seam.** The route is implemented (password
   only) but unused by the SPA; record its availability/limits in
   `docs/architecture.md` for future use.
+- **OAuth account-profile management.** Google SSO links identities and
+  auto-provisions guest accounts, but there is no UI to manage linked OAuth
+  identities or OAuth-created accounts beyond the admin user view; a future pass
+  could surface these.
 
 Completed since v0.1 (no longer open): **browser-automation verification** (now
 a persistent CDP suite), **authentication** (added in Sprint 01, rebuilt on
-fastapi-users in Sprint 02), and **session expiry / server-side session
-lifetime** (added in Sprint 02).
+fastapi-users in Sprint 02), **session expiry / server-side session lifetime**
+(added in Sprint 02), **Google SSO login** (added in Sprint 03), and **superuser
+admin UI** for account/role management (added in Sprint 03).

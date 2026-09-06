@@ -79,3 +79,45 @@ Full details: `README.md`, `docs/architecture.md` (§9),
   curl checks.
 
 See `docs/verification-report.md` for the evidence-backed detail.
+
+---
+
+# Company Hub — Sprint 02 vs Sprint 03
+
+Concise comparison of the changes introduced by the Sprint 03 enhancement pass.
+Full details: `README.md`, `docs/architecture.md` (§10),
+`docs/verification-report.md` (Sprint 03 section).
+
+## Feature-set changes
+
+| Area | Sprint 02 | Sprint 03 |
+|---|---|---|
+| **Access control** | Single `is_superuser` boolean | Four-level `access_level` (**guest / read-only / user / admin**, admin = superuser) via versioned migration `0003_sprint03_roles`; `me` = `{id, email, access_level}` |
+| **Role-gated API** | Session auth only; superuser-only user creation | Data routes gated by level: reads = read-only+, writes + document generation = user+, user management = admin; denials `403 "Insufficient access level"`, `401` stays session-only |
+| **User management** | Superuser-only `POST /api/auth/users` (no list/update/delete, no UI) | Admin **Users** view + `GET/PATCH/DELETE /api/auth/users{/id}` and level-aware `POST`; guardrails (immutable bootstrap admin, no self role-change, last-admin backstop) |
+| **Guest / read-only UX** | All authenticated users had full access | Guests see a blocked "Access pending" view; read-only users view/download but mutating controls are hidden (and form routes hard-blocked); friendly `403` message keeps the session |
+| **Google sign-in** | Schema-only `oauth_accounts`; no OAuth routes | Config-driven **Sign in with Google** (button shown only when enabled); `providers` always mounted, `authorize`/`callback` mounted when Google credentials are set; links the Google identity, auto-provisions a **guest** account for unknown emails, same cookie session. End-to-end flow verified **manually** (scope o, not automated) |
+| **Sign-in page nav** | Unauthenticated users still saw the top nav | Entire top `<nav>` (`#nav-bar`) hidden when unauthenticated; shown in full once signed in |
+
+## Unchanged (no regression)
+
+- All non-auth API contracts, responses, and semantics (browse/search, profile,
+  add/edit, locations/references/news, logo, artifacts/object storage, document
+  generation) are unchanged.
+- Seed content and seeding rules are unchanged; seeding still runs only on an
+  empty `companies` table.
+- Existing auth behavior is unchanged: email/password login, logout,
+  `change-password`, session gating, and cookie TTL all work as before.
+- The `oauth_accounts` table was consumed as-is by SSO; no dev-DB flush was
+  needed (the `access_level` field lands via versioned migration).
+
+## Verification summary
+
+- **Sprint 02:** PASS — 0 failures, 64 backend pytest + 36 CDP browser + 28 live
+  curl checks.
+- **Sprint 03:** PASS — 0 failures, 81 backend pytest + 36 CDP browser + 46 live
+  curl checks, plus two manual items recorded as delivered (end-to-end Google
+  SSO sign-in, and the last-admin guardrail, which is present but unreachable by
+  design).
+
+See `docs/verification-report.md` for the evidence-backed detail.
