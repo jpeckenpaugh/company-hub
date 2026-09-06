@@ -1,7 +1,7 @@
-import { login, me } from "./api.js";
+import { login, me, providers } from "./api.js";
 import { esc, setSession } from "./app.js";
 
-export function renderLogin(container) {
+export async function renderLogin(container) {
   container.innerHTML = `
     <div class="row justify-content-center">
       <div class="col-sm-8 col-md-6 col-lg-4">
@@ -25,6 +25,7 @@ export function renderLogin(container) {
                 <i class="bi bi-box-arrow-in-right me-1"></i>Sign in
               </button>
             </form>
+            <div id="google-sso-slot"></div>
           </div>
         </div>
       </div>
@@ -57,4 +58,18 @@ export function renderLogin(container) {
       btn.disabled = false;
     }
   });
+
+  try {
+    const p = await providers();
+    const slot = container.querySelector("#google-sso-slot");
+    if (slot && p && p.google) {
+      slot.innerHTML = `
+        <hr class="my-3">
+        <a class="btn btn-outline-secondary w-100" href="/api/auth/authorize">
+          <i class="bi bi-google me-1"></i>Sign in with Google
+        </a>`;
+    }
+  } catch {
+    /* SSO availability unknown; fall back to email/password only */
+  }
 }

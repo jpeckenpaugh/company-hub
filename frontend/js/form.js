@@ -7,7 +7,7 @@ import {
   listCountries,
   createLocation,
 } from "./api.js";
-import { esc, showToast } from "./app.js";
+import { esc, showToast, canMutate } from "./app.js";
 
 const FIELDS = [
   ["name", "Name", "text", true],
@@ -20,6 +20,25 @@ const FIELDS = [
 const LOCATION_TYPES = ["Headquarters", "Office", "Plant", "Other"];
 
 export async function renderForm(container, companyId) {
+  if (!canMutate()) {
+    container.innerHTML = `
+      <div class="row justify-content-center">
+        <div class="col-sm-8 col-md-6 col-lg-5">
+          <div class="card mt-4">
+            <div class="card-body p-4 text-center">
+              <i class="bi bi-shield-lock d-block fs-1 text-secondary mb-3"></i>
+              <h1 class="h4 mb-2">Not permitted</h1>
+              <p class="text-secondary mb-0">
+                Your account does not have permission to create or edit companies.
+              </p>
+              <a href="#/" class="btn btn-outline-secondary mt-3">Back to companies</a>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    return;
+  }
+
   const editing = companyId != null;
   let company = null;
   let industries = [];

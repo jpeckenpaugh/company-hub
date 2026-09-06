@@ -29,6 +29,9 @@ async function http(path, options = {}) {
     let detail = body?.detail;
     if (detail == null && body?.message) detail = body.message;
     if (detail == null) detail = `Request failed (${res.status})`;
+    if (res.status === 403) {
+      detail = "You don't have permission to perform this action";
+    }
     if (res.status === 401 && !options.bypassAuth && onUnauthorized) {
       onUnauthorized();
     }
@@ -143,3 +146,17 @@ export async function uploadLogo(companyId, file) {
 
 export const deleteLogo = (companyId) =>
   http(`${API_BASE}/companies/${companyId}/logo`, { method: "DELETE" });
+
+export const providers = () =>
+  http(`${API_BASE}/auth/providers`, { bypassAuth: true });
+
+export const listUsers = () => http(`${API_BASE}/auth/users`);
+
+export const createUser = (data) =>
+  http(`${API_BASE}/auth/users`, json("POST", data));
+
+export const updateUser = (id, data) =>
+  http(`${API_BASE}/auth/users/${id}`, json("PATCH", data));
+
+export const deleteUser = (id) =>
+  http(`${API_BASE}/auth/users/${id}`, { method: "DELETE" });

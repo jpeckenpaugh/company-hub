@@ -1,5 +1,5 @@
 import { listCompanies, listCountries } from "./api.js";
-import { esc, completenessBadge } from "./app.js";
+import { esc, completenessBadge, canMutate } from "./app.js";
 
 export async function renderList(container) {
   container.innerHTML = `
@@ -7,11 +7,12 @@ export async function renderList(container) {
       <div class="col">
         <h1 class="h4 mb-0">Companies</h1>
       </div>
+      ${canMutate() ? `
       <div class="col-auto">
         <a class="btn btn-primary" href="#/companies/new">
           <i class="bi bi-plus-lg me-1"></i>Add company
         </a>
-      </div>
+      </div>` : ""}
     </div>
     <div class="row mb-3 g-2">
       <div class="col-md-6 col-lg-4">

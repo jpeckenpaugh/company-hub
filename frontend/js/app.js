@@ -4,10 +4,28 @@ import { renderForm } from "./form.js";
 import { renderIndustries } from "./industries.js";
 import { renderPassword } from "./password.js";
 import { renderLogin } from "./login.js";
+import { renderUsers } from "./users.js";
 import { me, logout, setOnUnauthorized } from "./api.js";
 
 const view = document.getElementById("view");
 let session = null;
+
+export function currentUser() {
+  return session;
+}
+
+export function accessLevel() {
+  return session ? session.access_level : null;
+}
+
+export function isAdmin() {
+  return accessLevel() === "admin";
+}
+
+export function canMutate() {
+  const level = accessLevel();
+  return level === "user" || level === "admin";
+}
 
 export function esc(value) {
   return String(value ?? "").replace(
@@ -95,6 +113,7 @@ function parseRoute(hash) {
   if (parts.length === 0) return { name: "list" };
   if (parts[0] === "industries") return { name: "industries" };
   if (parts[0] === "password") return { name: "password" };
+  if (parts[0] === "users") return { name: "users" };
   if (parts[0] === "companies") {
     if (parts[1] === "new") return { name: "form", companyId: null };
     if (parts[1] && parts[2] === "edit")
@@ -106,10 +125,39 @@ function parseRoute(hash) {
 }
 
 function updateNav() {
-  const mainNav = document.getElementById("mainNav");
-  const toggler = document.getElementById("nav-toggler");
-  if (mainNav) mainNav.classList.toggle("d-none", !session);
-  if (toggler) toggler.classList.toggle("d-none", !session);
+  const nav = document.getElementById("nav-bar");
+  if (!session) {
+    if (nav) nav.classList.add("d-none");
+    return;
+  }
+  if (nav) nav.classList.remove("d-none");
+  const guest = session.access_level === "guest";
+  const admin = session.access_level === "admin";
+  const companies = document.getElementById("nav-companies");
+  const industries = document.getElementById("nav-industries");
+  const users = document.getElementById("nav-users");
+  if (companies) companies.classList.toggle("d-none", guest);
+  if (industries) industries.classList.toggle("d-none", guest);
+  if (users) users.classList.toggle("d-none", !admin);
+}
+
+function renderBlockedGuest(container) {
+  container.innerHTML = `
+    <div class="row justify-content-center">
+      <div class="col-sm-8 col-md-6 col-lg-5">
+        <div class="card mt-4">
+          <div class="card-body p-4 text-center">
+            <i class="bi bi-hourglass-split d-block fs-1 text-secondary mb-3"></i>
+            <h1 class="h4 mb-2">Access pending</h1>
+            <p class="text-secondary mb-0">
+              Your account has not been granted access yet. An administrator must
+              elevate your account before you can use Company Hub. You can change
+              your password or log out from the menu above.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>`;
 }
 
 function render(route) {
@@ -117,11 +165,17 @@ function render(route) {
     renderLogin(view);
     return;
   }
+  if (session.access_level === "guest") {
+    if (route.name === "password") renderPassword(view);
+    else renderBlockedGuest(view);
+    return;
+  }
   showViewLoading();
   if (route.name === "profile") renderProfile(view, route.companyId);
   else if (route.name === "form") renderForm(view, route.companyId);
   else if (route.name === "industries") renderIndustries(view);
   else if (route.name === "password") renderPassword(view);
+  else if (route.name === "users") renderUsers(view);
   else renderList(view);
 }
 

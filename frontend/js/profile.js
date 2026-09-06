@@ -23,11 +23,13 @@ import {
   formatSize,
   formatDate,
   showToast,
+  canMutate,
 } from "./app.js";
 
 const LOCATION_TYPES = ["Headquarters", "Office", "Plant", "Other"];
 
 export async function renderProfile(container, companyId) {
+  const write = canMutate();
   container.innerHTML = `
     <div class="mb-3">
       <a href="#/" class="btn btn-sm btn-outline-secondary">
@@ -56,6 +58,7 @@ export async function renderProfile(container, companyId) {
     <div class="row g-4">
       <div class="col-lg-7">
         ${mainCard(company)}
+        ${write ? `
         <div class="d-flex gap-2 flex-wrap mb-4">
           <a href="#/companies/${company.id}/edit" class="btn btn-outline-secondary">
             <i class="bi bi-pencil me-1"></i>Edit
@@ -64,27 +67,27 @@ export async function renderProfile(container, companyId) {
             <i class="bi bi-file-earmark-pdf me-1"></i>Generate summary
           </button>
         </div>
-        <div id="generate-feedback" class="mb-4"></div>
-        ${locationsCard(company, countries)}
+        <div id="generate-feedback" class="mb-4"></div>` : ""}
+        ${locationsCard(company, countries, write)}
       </div>
 
       <div class="col-lg-5">
-        ${logoCard(company)}
-        ${filesCard(company)}
+        ${logoCard(company, write)}
+        ${filesCard(company, write)}
       </div>
     </div>
 
     <div class="row g-4">
-      <div class="col-lg-6">${referencesCard(company)}</div>
-      <div class="col-lg-6">${newsCard(company)}</div>
+      <div class="col-lg-6">${referencesCard(company, write)}</div>
+      <div class="col-lg-6">${newsCard(company, write)}</div>
     </div>`;
 
   wireLogo(container, body, company);
-  wireFiles(container, body, company);
-  wireLocations(container, body, company, countries);
-  wireReferences(container, body, company);
-  wireNews(container, body, company);
-  wireGenerate(body, company);
+  wireFiles(container, body, company, write);
+  wireLocations(container, body, company, countries, write);
+  wireReferences(container, body, company, write);
+  wireNews(container, body, company, write);
+  wireGenerate(body, company, write);
 }
 
 function mainCard(company) {
@@ -110,7 +113,7 @@ function mainCard(company) {
     </div>`;
 }
 
-function logoCard(company) {
+function logoCard(company, write) {
   return `
     <div class="card mb-4">
       <div class="card-header">
@@ -122,6 +125,7 @@ function logoCard(company) {
             ? `<img src="${esc(company.logo_url)}" class="profile-logo" alt="${esc(company.name)} logo">`
             : `<span class="text-secondary">No logo set</span>`}
         </div>
+        ${write ? `
         <form id="logo-form" class="d-flex gap-2">
           <input type="file" id="logo-file" class="form-control form-control-sm" accept="image/*" required>
           <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">
@@ -132,12 +136,12 @@ function logoCard(company) {
           ? `<button id="logo-remove" class="btn btn-sm btn-outline-danger mt-2 w-100">
                <i class="bi bi-trash me-1"></i>Remove logo
              </button>`
-          : ""}
+          : ""}` : ""}
       </div>
     </div>`;
 }
 
-function locationsCard(company, countries) {
+function locationsCard(company, countries, write) {
   const locs = company.locations || [];
   const items =
     locs.length === 0
@@ -157,6 +161,7 @@ function locationsCard(company, countries) {
             <span class="badge rounded-pill text-bg-light border ms-1">${esc(l.type)}</span>
           </div>
         </div>
+        ${write ? `
         <div class="d-flex gap-2 flex-shrink-0">
           <button class="btn btn-sm btn-outline-secondary edit-location" data-id="${l.id}">
             <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
@@ -164,7 +169,7 @@ function locationsCard(company, countries) {
           <button class="btn btn-sm btn-outline-danger remove-location" data-id="${l.id}">
             <i class="bi bi-trash"></i><span class="visually-hidden">Remove</span>
           </button>
-        </div>
+        </div>` : ""}
       </div>`
           )
           .join("");
@@ -174,9 +179,10 @@ function locationsCard(company, countries) {
         <span class="muted-label">Locations</span>
         <div class="d-flex gap-2 align-items-center">
           <span class="badge text-bg-light border">${locs.length}</span>
+          ${write ? `
           <button class="btn btn-sm btn-outline-primary" id="add-location-btn">
             <i class="bi bi-plus-lg me-1"></i>Add location
-          </button>
+          </button>` : ""}
         </div>
       </div>
       <div class="card-body">
@@ -186,7 +192,7 @@ function locationsCard(company, countries) {
     </div>`;
 }
 
-function referencesCard(company) {
+function referencesCard(company, write) {
   const refs = company.references || [];
   const items =
     refs.length === 0
@@ -210,6 +216,7 @@ function referencesCard(company) {
               ${r.updated_at !== r.created_at ? ` · updated ${esc(formatDate(r.updated_at))}` : ""}
             </div>
           </div>
+          ${write ? `
           <div class="d-flex gap-2 flex-shrink-0">
             <button class="btn btn-sm btn-outline-secondary edit-reference" data-id="${r.id}">
               <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
@@ -217,7 +224,7 @@ function referencesCard(company) {
             <button class="btn btn-sm btn-outline-danger remove-reference" data-id="${r.id}">
               <i class="bi bi-trash"></i><span class="visually-hidden">Remove</span>
             </button>
-          </div>
+          </div>` : ""}
         </div>
       </div>`
           )
@@ -228,9 +235,10 @@ function referencesCard(company) {
         <span class="muted-label">References</span>
         <div class="d-flex gap-2 align-items-center">
           <span class="badge text-bg-light border">${refs.length}</span>
+          ${write ? `
           <button class="btn btn-sm btn-outline-primary" id="add-reference-btn">
             <i class="bi bi-plus-lg me-1"></i>Add reference
-          </button>
+          </button>` : ""}
         </div>
       </div>
       <div class="card-body">
@@ -240,7 +248,7 @@ function referencesCard(company) {
     </div>`;
 }
 
-function newsCard(company) {
+function newsCard(company, write) {
   const news = company.news || [];
   const items =
     news.length === 0
@@ -267,6 +275,7 @@ function newsCard(company) {
               <span class="stat-muted small ms-1">added ${esc(formatDate(n.created_at))}</span>
             </div>
           </div>
+          ${write ? `
           <div class="d-flex gap-2 flex-shrink-0">
             <button class="btn btn-sm btn-outline-secondary edit-news" data-id="${n.id}">
               <i class="bi bi-pencil"></i><span class="visually-hidden">Edit</span>
@@ -274,7 +283,7 @@ function newsCard(company) {
             <button class="btn btn-sm btn-outline-danger remove-news" data-id="${n.id}">
               <i class="bi bi-trash"></i><span class="visually-hidden">Remove</span>
             </button>
-          </div>
+          </div>` : ""}
         </div>
       </div>`
           )
@@ -285,9 +294,10 @@ function newsCard(company) {
         <span class="muted-label">News</span>
         <div class="d-flex gap-2 align-items-center">
           <span class="badge text-bg-light border">${news.length}</span>
+          ${write ? `
           <button class="btn btn-sm btn-outline-primary" id="add-news-btn">
             <i class="bi bi-plus-lg me-1"></i>Add news
-          </button>
+          </button>` : ""}
         </div>
       </div>
       <div class="card-body">
@@ -297,7 +307,7 @@ function newsCard(company) {
     </div>`;
 }
 
-function filesCard(company) {
+function filesCard(company, write) {
   return `
     <div class="card">
       <div class="card-header d-flex justify-content-between align-items-center">
@@ -305,12 +315,13 @@ function filesCard(company) {
         <span class="badge text-bg-light border">${company.artifacts_count}</span>
       </div>
       <div class="card-body">
+        ${write ? `
         <form id="upload-form" class="d-flex gap-2 mb-3">
           <input type="file" id="upload-file" class="form-control form-control-sm" required>
           <button type="submit" class="btn btn-sm btn-outline-primary text-nowrap">
             <i class="bi bi-upload me-1"></i>Upload
           </button>
-        </form>
+        </form>` : ""}
         <div id="artifact-list" class="text-center text-secondary py-3">Loading…</div>
       </div>
     </div>`;
@@ -499,11 +510,13 @@ function wireLogo(container, body, company) {
   }
 }
 
-function wireFiles(container, body, company) {
+function wireFiles(container, body, company, write) {
   const listEl = body.querySelector("#artifact-list");
-  renderArtifacts(container, listEl, company.artifacts, company.id);
+  renderArtifacts(container, listEl, company.artifacts, company.id, write);
 
-  body.querySelector("#upload-form").addEventListener("submit", async (e) => {
+  const uploadForm = body.querySelector("#upload-form");
+  if (!uploadForm) return;
+  uploadForm.addEventListener("submit", async (e) => {
     e.preventDefault();
     const input = body.querySelector("#upload-file");
     const file = input.files && input.files[0];
@@ -521,7 +534,7 @@ function wireFiles(container, body, company) {
   });
 }
 
-function wireLocations(container, body, company, countries) {
+function wireLocations(container, body, company, countries, write) {
   const editor = body.querySelector("#location-editor");
   let editingId = null;
 
@@ -566,7 +579,8 @@ function wireLocations(container, body, company, countries) {
     editor.innerHTML = "";
   }
 
-  body.querySelector("#add-location-btn").addEventListener("click", () => openEditor(null));
+  const addLocBtn = body.querySelector("#add-location-btn");
+  if (addLocBtn) addLocBtn.addEventListener("click", () => openEditor(null));
   body.querySelectorAll(".edit-location").forEach((btn) => {
     btn.addEventListener("click", () => {
       const loc = (company.locations || []).find((l) => l.id === Number(btn.dataset.id));
@@ -587,7 +601,7 @@ function wireLocations(container, body, company, countries) {
   });
 }
 
-function wireReferences(container, body, company) {
+function wireReferences(container, body, company, write) {
   const editor = body.querySelector("#reference-editor");
   let editingId = null;
 
@@ -628,7 +642,8 @@ function wireReferences(container, body, company) {
     });
   }
 
-  body.querySelector("#add-reference-btn").addEventListener("click", () => openEditor(null));
+  const addRefBtn = body.querySelector("#add-reference-btn");
+  if (addRefBtn) addRefBtn.addEventListener("click", () => openEditor(null));
   body.querySelectorAll(".edit-reference").forEach((btn) => {
     btn.addEventListener("click", () => {
       const ref = (company.references || []).find((r) => r.id === Number(btn.dataset.id));
@@ -649,7 +664,7 @@ function wireReferences(container, body, company) {
   });
 }
 
-function wireNews(container, body, company) {
+function wireNews(container, body, company, write) {
   const editor = body.querySelector("#news-editor");
   let editingId = null;
 
@@ -692,7 +707,8 @@ function wireNews(container, body, company) {
     });
   }
 
-  body.querySelector("#add-news-btn").addEventListener("click", () => openEditor(null));
+  const addNewsBtn = body.querySelector("#add-news-btn");
+  if (addNewsBtn) addNewsBtn.addEventListener("click", () => openEditor(null));
   body.querySelectorAll(".edit-news").forEach((btn) => {
     btn.addEventListener("click", () => {
       const item = (company.news || []).find((n) => n.id === Number(btn.dataset.id));
@@ -713,10 +729,11 @@ function wireNews(container, body, company) {
   });
 }
 
-function wireGenerate(body, company) {
-  body.querySelector("#generate-btn").addEventListener("click", async () => {
+function wireGenerate(body, company, write) {
+  const btn = body.querySelector("#generate-btn");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
     const feedback = body.querySelector("#generate-feedback");
-    const btn = body.querySelector("#generate-btn");
     btn.disabled = true;
     feedback.innerHTML = "";
     try {
@@ -737,7 +754,7 @@ function wireGenerate(body, company) {
   });
 }
 
-function renderArtifacts(container, listEl, artifacts, companyId) {
+function renderArtifacts(container, listEl, artifacts, companyId, write) {
   if (!artifacts || artifacts.length === 0) {
     listEl.innerHTML = `
       <i class="bi bi-folder2-open d-block fs-3 mb-2"></i>
@@ -765,9 +782,10 @@ function renderArtifacts(container, listEl, artifacts, companyId) {
             <a class="btn btn-sm btn-outline-secondary" href="${esc(a.download_url)}" download>
               <i class="bi bi-download"></i><span class="visually-hidden">Download</span>
             </a>
+            ${write ? `
             <button class="btn btn-sm btn-outline-danger delete-artifact" data-id="${a.id}">
               <i class="bi bi-trash"></i><span class="visually-hidden">Delete</span>
-            </button>
+            </button>` : ""}
           </div>
         </div>`;
     })

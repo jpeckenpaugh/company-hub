@@ -1,15 +1,17 @@
 import { createIndustry, listIndustries, renameIndustry } from "./api.js";
-import { esc, showToast } from "./app.js";
+import { esc, showToast, canMutate } from "./app.js";
 
 export async function renderIndustries(container) {
+  const write = canMutate();
   container.innerHTML = `
     <div class="row mb-3">
       <div class="col">
         <h1 class="h4 mb-0">Industries</h1>
-        <p class="text-secondary mb-0">Add and rename the controlled industry list. Renaming updates every company that uses it.</p>
+        <p class="text-secondary mb-0">${write ? "Add and rename the controlled industry list. Renaming updates every company that uses it." : "View the controlled industry list."}</p>
       </div>
     </div>
     <div class="row g-4">
+      ${write ? `
       <div class="col-lg-5">
         <div class="card">
           <div class="card-body">
@@ -24,7 +26,7 @@ export async function renderIndustries(container) {
           </div>
         </div>
       </div>
-      <div class="col-lg-7">
+      <div class="col-lg-7">` : `<div class="col-12">`}
         <div class="card">
           <div class="card-header">
             <span class="muted-label">Standard list</span>
@@ -50,25 +52,27 @@ export async function renderIndustries(container) {
     }
   }
 
-  addForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    alertEl.innerHTML = "";
-    const input = addForm.querySelector("#new-industry-name");
-    const name = input.value.trim();
-    if (!name) return;
-    const btn = addForm.querySelector("button[type=submit]");
-    btn.disabled = true;
-    try {
-      await createIndustry(name);
-      input.value = "";
-      showToast("Industry added");
-      await load();
-    } catch (err) {
-      alertEl.innerHTML = `<div class="alert alert-danger py-2 mb-0">${esc(err.message)}</div>`;
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  if (addForm) {
+    addForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      alertEl.innerHTML = "";
+      const input = addForm.querySelector("#new-industry-name");
+      const name = input.value.trim();
+      if (!name) return;
+      const btn = addForm.querySelector("button[type=submit]");
+      btn.disabled = true;
+      try {
+        await createIndustry(name);
+        input.value = "";
+        showToast("Industry added");
+        await load();
+      } catch (err) {
+        alertEl.innerHTML = `<div class="alert alert-danger py-2 mb-0">${esc(err.message)}</div>`;
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  }
 
   function wireRows() {
     listEl.querySelectorAll(".rename-industry").forEach((btn) => {
@@ -118,10 +122,11 @@ export async function renderIndustries(container) {
         (i) => `
       <div class="d-flex justify-content-between align-items-center py-2 border-bottom industry-row" data-id="${i.id}">
         <span class="fw-semibold">${esc(i.name)}</span>
+        ${write ? `
         <button type="button" class="btn btn-sm btn-outline-secondary rename-industry"
                 data-id="${i.id}" data-name="${esc(i.name)}">
           <i class="bi bi-pencil me-1"></i>Rename
-        </button>
+        </button>` : ""}
       </div>`
       )
       .join("");
