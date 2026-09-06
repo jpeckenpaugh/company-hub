@@ -28,7 +28,7 @@ test("login view rendered when unauthenticated", async () => {
 
 test("nav hidden when unauthenticated", async () => {
   assert.ok(
-    await cdp.evalJs(`document.getElementById('mainNav').classList.contains('d-none')`)
+    await cdp.evalJs(`document.getElementById('nav-bar').classList.contains('d-none')`)
   );
 });
 
@@ -41,7 +41,7 @@ test("login navigates to companies list", async () => {
 
 test("nav visible when authenticated", async () => {
   assert.ok(
-    await cdp.evalJs(`!document.getElementById('mainNav').classList.contains('d-none')`)
+    await cdp.evalJs(`!document.getElementById('nav-bar').classList.contains('d-none')`)
   );
 });
 

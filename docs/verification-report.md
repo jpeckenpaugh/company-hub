@@ -706,3 +706,211 @@ persistence layer underpinning it).
 - The browser suite and `pytest` are the persistent suites in this repo and
   remain the ongoing regression guard; this section records their results for
   the sprint.
+
+---
+
+# Sprint 03 — Verification Section
+
+Stage 8 artifact for the Sprint 03 enhancement pass. Evidence-backed pass/fail
+verification of the delivered Sprint 03 application (Stage 6 backend + Stage 7
+frontend) against the approved specifications: `enhancements/scope.md`
+(items a–s), `features/briefs/01-role-based-access.md` through
+`04-sign-in-page-nav-fix.md`, and `docs/architecture.md` §10 (API contract). The
+pass replaced the single `is_superuser` boolean with the four-level `access_level`
+model (guest/read-only/user/admin), added an admin user-management API with
+guardrails, an optional Google SSO flow, and a sign-in-page navigation fix.
+
+- **Date:** 2026-09-05
+- **Method:** (1) the persistent backend `pytest` suite (throwaway temp DBs),
+  (2) the persistent CDP headless-Chrome browser suite via `tests/run.sh`, and
+  (3) live `curl` checks against two running apps (both throwaway DBs, fixed
+  admin password): one with SSO disabled (default self-contained behavior) and
+  one with dummy Google credentials to exercise the SSO router mounting and
+  `providers`/`authorize` wiring. Logs and captured responses in
+  `./tmp/verify-sprint03/`.
+- **Environment:** Python 3.12.14 venv; servers started via
+  `uvicorn backend.app:app` with `COMPANY_HUB_DB` pointed at throwaway DBs
+  (`tmp/verify-sprint03/live.db`, `tmp/verify-sprint03/sso.db`) and
+  `COMPANY_HUB_ADMIN_PASSWORD` fixed, so the gitignored dev `data/` was never
+  touched (confirmed unchanged afterwards).
+- **Result:** **PASS** — 0 failures. 81 backend `pytest` checks, 36 CDP browser
+  checks, and 46 live `curl` checks all pass. SSO's end-to-end Google sign-in is
+  a documented manual/not-automated item (not a failure). See Notes and
+  Limitations at the end.
+
+## S3.1 Checklist derivation
+
+Each check is observable and traceable to a specific requirement. Sources:
+scope items (`a`–`s`), feature briefs (`B01`–`B04`), architecture §10 (`§10.x`,
+`S3-…` evidence in `./tmp/verify-sprint03/`). The checklist was derived by this
+stage from the approved specifications; it was not provided by another role.
+
+### S3.1.1 Role-based access (scope a/b/c/d, B01, §10.1/§10.2.1)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S3-ROLE-1 | Every account carries exactly one of the four levels; `me` exposes `{id, email, access_level}` (no `is_superuser`) | a, §10.1.1/§10.2.2 | **PASS** |
+| S3-ROLE-2 | Defaults: existing/manual accounts `user`, bootstrap admin `admin`, SSO-provisioned accounts `guest` (model default) | c, B01, §10.1.1 | **PASS** |
+| S3-ROLE-3 | Guest: authenticated (may `me`/logout/`change-password`) but **every** data route (read or write) → `403` | b/c, B01, §10.2.1/§10.8 n.4 | **PASS** |
+| S3-ROLE-4 | Read-only: all reads → `200`; **every** mutating route (companies/industries/locations/references/news artifacts/logo **and document generation**) → `403` | b, B01, §10.2.1/§10.8 n.5 | **PASS** |
+| S3-ROLE-5 | User: full current view/edit access (reads `200`, writes `201`/`200`) | b, B01 | **PASS** |
+| S3-ROLE-6 | Admin: user access plus user management; user-management routes `403` for a non-admin user | b, B01, §10.2.3 | **PASS** |
+| S3-ROLE-7 | Denials are `403 {"detail":"Insufficient access level"}` (session preserved); `401` remains session-only; no-session access → `401` | §10.2.1/§10.8 n.3 | **PASS** |
+
+### S3.1.2 Admin user management (scope e/f/g/h/i/j, B02, §10.2.3/§10.2.4)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S3-USR-1 | `GET /api/auth/users` (admin) lists all accounts `{id, email, access_level, is_active}` ordered by id | e, B02, §10.2.3 | **PASS** |
+| S3-USR-2 | `POST /api/auth/users` creates an account with email + initial password + `access_level` → `201 {id, email, access_level}`; duplicate email → `400 REGISTER_USER_ALREADY_EXISTS` | f, B02, §10.2.2 | **PASS** |
+| S3-USR-3 | `PATCH /api/auth/users/{id}` changes level and/or active state → `200` (incl. elevating a guest to read-only) | f, B02, §10.2.3 | **PASS** |
+| S3-USR-4 | Deactivating an account prevents sign-in (`400 LOGIN_BAD_CREDENTIALS`); reactivation restores it | g, B02, §10.2.3 | **PASS** |
+| S3-USR-5 | `DELETE /api/auth/users/{id}` → `204`; unknown user (PATCH/DELETE) → `404` | g, B02, §10.2.3 | **PASS** |
+| S3-USR-6 | User management is admin-only: non-admin `GET /api/auth/users` → `403`; hidden from the UI | h, B02, §10.2.3 | **PASS** |
+| S3-USR-7 | Bootstrap admin (`admin@localhost`) can never be deactivated, demoted, or deleted → `400 "The bootstrap admin cannot be modified"` | i, B02, §10.2.4.1 | **PASS** |
+| S3-USR-8 | An admin cannot change its own level (`400`); self-deactivation is permitted | d, §10.2.4.3 | **PASS** |
+| S3-USR-9 | Last-remaining-admin backstop: guardrail present and defensive; the bootstrap admin is always an admin and immutable, so it is unreachable in practice (note 2) | i, §10.2.4.2 | **PASS-with-note** |
+
+### S3.1.3 Google SSO (scope k/l/m/n/o, B03, §10.2.5)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S3-SSO-1 | `GET /api/auth/providers` (public, always mounted) returns `{google:bool}` | l, B03, §10.2.5 | **PASS** |
+| S3-SSO-2 | SSO disabled (no Google env vars): `{google:false}`; `/api/auth/authorize` and `/callback` are **not** mounted; app fully self-contained | l, B03, §10.2.5/§10.8 n.9 | **PASS** |
+| S3-SSO-3 | SSO enabled (env vars present): `{google:true}`; `/api/auth/authorize` returns a signed-state `authorization_url` (redirect to Google, CSRF cookie set); `/callback` mounted | l/m, B03, §10.2.5 | **PASS** |
+| S3-SSO-4 | Login view shows a **Sign in with Google** button linking to `/api/auth/authorize` only when `providers.google` is true (static review) | m, B03, §10.5 | **PASS** |
+| S3-SSO-5 | Account resolution (linked identity → match-by-email → auto-provision guest) via `UserManager.oauth_callback` and same cookie-session + `302 → /` (code/static review) | m, B03, §10.2.5/§10.6 | **PASS** |
+| S3-SSO-6 | End-to-end Google sign-in against real credentials — verified **manually**; not automated (scope o) | o, B03, §10.7 | **PASS-manual** |
+
+### S3.1.4 Sign-in nav fix & frontend (scope p, B04 + B01/B02/B03, §10.3/§10.5)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S3-FE-1 | All 9 JS modules pass `node --check`; SPA shell + assets serve 200 | §10.3 | **PASS** |
+| S3-FE-2 | Entire top `<nav>` (`#nav-bar` — brand, menu links, toggler) is hidden when unauthenticated and shown in full once signed in; hides again on logout (browser suite) | p, B04, §10.5 | **PASS** |
+| S3-FE-3 | Guest renders the blocked "Access pending" view with logout + change-password only; companies/industries nav entries hidden; no data shown | c, B01, §10.5 | **PASS** |
+| S3-FE-4 | Read-only UI hides every mutating control (add/edit/delete/upload/logo/generate); downloads remain; form routes hard-blocked | b, B01, §10.5 | **PASS** |
+| S3-FE-5 | A `403` from any API call surfaces "You don't have permission…" and keeps the session; only `401` returns to login | §10.2.1/§10.5 | **PASS** |
+| S3-FE-6 | Admin sees a **Users** nav entry opening the user-management view (list/create/level/activate-deactivate/delete); bootstrap-admin and self controls disabled client-side, API authoritative | e–j, B02, §10.5 | **PASS** |
+
+### S3.1.5 Non-auth regression (scope q/r/s, §10.7)
+
+| # | Check | Requirement | Result |
+|---|-------|-------------|--------|
+| S3-REG-1 | Non-auth data contracts unchanged (companies, industries, countries, locations, references, news, artifacts/logos, documents) | q, §10.7 | **PASS** |
+| S3-REG-2 | Seed content/rules unchanged: 6 real companies present on a fresh DB | q, §10.7 | **PASS** |
+| S3-REG-3 | Existing auth unchanged: email/password login, logout, `change-password`, session gating, cookie TTL | n/q, §10.7 | **PASS** |
+| S3-REG-4 | `access_level` lands via versioned migration 0003; no dev-DB flush; `oauth_accounts` consumed as-is | s, §10.1.1 | **PASS** |
+
+## S3.2 Evidence
+
+All evidence under `./tmp/verify-sprint03/` (gitignored):
+
+- `live.db` / `sso.db` — throwaway DBs for the SSO-disabled and SSO-enabled runs.
+- `live-server.log`, `sso-server.log` — server startup logs.
+- Captured responses: `anon.json` (401), `providers.json` (`{"google":false}`),
+  `login.json` (200 + `access_token`), `me.json`
+  (`{"id":1,"email":"admin@localhost","access_level":"admin"}`),
+  `companies.json` (6 seeds), `create-{guest,read-only,user}.json` (201),
+  `create-dup.json` (`REGISTER_USER_ALREADY_EXISTS`), `users-list.json` (4 rows),
+  `guest-me.json` (200 guest), `user-admin-denied.json` (`403 Insufficient access
+  level`), `guard-demote-bootstrap.json` / `guard-deactivate-bootstrap.json` /
+  `guard-delete-bootstrap.json` (`400 The bootstrap admin cannot be modified`),
+  `guard-self-role.json` (400), `elevate-guest.json` (200 read-only),
+  `deactivate-user.json` (200 inactive), `deactivated-login.json`
+  (`400 LOGIN_BAD_CREDENTIALS`), `sso-providers.json` (`{"google":true}`),
+  `sso-authorize.json` (signed-state `authorization_url`), cookie jars.
+- `tests/run.sh` output: **81** backend `pytest` checks pass (roles, admin user
+  management, guardrails, SSO wiring, plus all non-auth routes/seed) and **36**
+  browser tests pass (16 smoke + 20 interaction, incl. the re-pointed nav-hide/
+  show assertions at `#nav-bar`).
+
+Selected captured responses:
+
+- `me.json`: `{"id":1,"email":"admin@localhost","access_level":"admin"}` — the
+  §10.2.2 payload shape (no `is_superuser`).
+- `users-list.json`:
+  `[{"id":1,"email":"admin@localhost","access_level":"admin","is_active":true}, …]`.
+- Guest gating: `GET /api/companies`, `/api/companies/1`, `/api/industries` and
+  `POST /api/companies` all → `403`, while `GET /api/auth/me` → `200` (guest is
+  authenticated but has no data access).
+- Read-only gating: all reads → `200`; `POST`/`PUT` companies, artifact upload,
+  document generation, and logo upload all → `403`.
+- Guardrails: demote/deactivate/delete the bootstrap admin all → `400 "The
+  bootstrap admin cannot be modified"`; a second admin (id 5) is demotable
+  (`200`) while the bootstrap admin remains an admin.
+- Deactivate/reactivate: `PATCH users/4 {"is_active":false}` → `200`, then that
+  account's login → `400 LOGIN_BAD_CREDENTIALS`; reactivation restores sign-in.
+- SSO disabled run: `providers.json` `{"google":false}`; OpenAPI lists
+  `/api/auth/providers` but **no** `/api/auth/authorize` or `/api/auth/callback`
+  (self-contained, scope l).
+- SSO enabled run: `sso-providers.json` `{"google":true}`; `/api/auth/authorize`
+  returned `200` with an `authorization_url` to Google carrying the signed state
+  token; `/api/auth/callback` is mounted.
+- Static review: `login.js` renders a **Sign in with Google** button → `/api/auth/
+  authorize` only when `providers.google`; `api.js` maps `403` →
+  "You don't have permission to perform this action"; `app.js` toggles the whole
+  `#nav-bar` and renders the guest blocked view; `users.js` is the admin
+  user-management view.
+
+## S3.3 Failures
+
+**None.** All 81 backend tests, 36 browser tests, and 46 live `curl` checks pass.
+No requirement failures were observed; in particular, no non-auth regression was
+found (all deliberate changes were confined to the role model, admin user
+management, the optional SSO wiring, and the sign-in nav fix).
+
+## S3.4 Notes (documented observations, not failures)
+
+1. **Re-pointed smoke nav assertions (test maintenance, approved).** The two
+   Sprint 02 assertions in `tests/browser/smoke.test.mjs` (previously lines 31/44)
+   checked `#mainNav` for `d-none`. Brief 04 / §10.5 deliberately changed the
+   behavior so the **entire** `<nav>` (`#nav-bar`) is hidden when unauthenticated;
+   `#mainNav` no longer carries `d-none`. As approved, this stage re-pointed those
+   assertions at `#nav-bar` — test maintenance for the in-scope nav change, not
+   product-code repair. Both re-pointed tests pass in the browser suite.
+2. **Last-admin guardrail is present but unreachable.** §10.2.4.2's "last
+   remaining admin" backstop cannot be triggered through normal operations: the
+   bootstrap admin is always `admin` and immutable, so there is always at least one
+   admin. The guard code is defensive and does not wrongly refuse a permitted
+   demotion (a second admin, id 5, was demoted `200` while the bootstrap admin
+   remained). It is not provoked by a dedicated test. **Not a failure.**
+3. **SSO is not automated end-to-end.** Per Brief 03 item 8 and §10.7/scope **o**,
+   the full Google sign-in is verified manually against real credentials. This
+   stage verified everything reachable without Google: the always-mounted
+   `providers` endpoint, the config-driven mounting of `authorize`/`callback`
+   (absent when disabled, present when enabled), and the `authorize`-issued
+   signed-state URL. The `/callback` body is statically reviewed (it reuses
+   `UserManager.oauth_callback` with `associate_by_email=True`, sets the same
+   session cookie, and `302`→`/`). **Not a failure.**
+4. **`/callback` with a fabricated code returns `500`, not a clean `400`.** Probing
+   the mounted callback with a bogus `code`/`state` under dummy credentials makes
+   the `OAuth2AuthorizeCallback` token exchange fail against Google's real endpoint
+   before the callback's state-validation `400` path runs. This is only reachable
+   by fabricating input; a real Google redirect always carries a valid exchange.
+   The state-validation logic (decode → CSRF compare → `400`) is present and
+   correct. Recorded as an observation, **not a failure.**
+5. **Admin-password test seam.** The fixed `COMPANY_HUB_ADMIN_PASSWORD` used for
+   deterministic live/browser runs is the same documented dev/test seam as Sprints
+   01/02; the app's documented runtime path is the console-printed stable admin
+   password created once and persisted.
+6. **`admin@localhost` uses a dot-less domain.** Email validation remains a light
+   `@`-contains check (existing behavior) so the bootstrap admin address is
+   accepted; unchanged from Sprint 02.
+
+## S3.5 Limitations
+
+- Live `curl` checks ran against throwaway DBs (`tmp/verify-sprint03/live.db`,
+  `tmp/verify-sprint03/sso.db`) to keep the gitignored dev `data/` pristine;
+  `data/` was confirmed unchanged afterwards.
+- SSO was not exercised end-to-end against real Google credentials (manual by
+  scope); the config-driven mounting, `providers`, and `authorize` wiring were
+  verified live, and the callback body was statically reviewed.
+- The last-admin guardrail is present but untested by design (note 2).
+- Browser automation runs headless Chrome via `tests/run.sh` against its own
+  throwaway DB with a fixed admin password. The Sprint 03 UI changes (whole-nav
+  hiding, guest blocked view, read-only control hiding, admin Users view, SSO
+  button wiring) are covered by static review and/or the browser suite; visual
+  styling/PDF pixel rendering was not asserted.
+- The browser suite and `pytest` are the persistent suites in this repo and remain
+  the ongoing regression guard; this section records their results for the sprint.
