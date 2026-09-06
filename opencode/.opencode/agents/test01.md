@@ -6,6 +6,7 @@ permission:
   "*": deny
   websearch: allow
   get_*: allow
+  add_*: allow
   bash: deny
   edit: deny
 ---
