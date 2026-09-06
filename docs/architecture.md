@@ -1510,3 +1510,441 @@ are unchanged.
     the dev DB under `data/` is flushed once (scope **n**) by Stage 6 before the
     first run of the new build. After that, changes are versioned migrations
     only (scope **b**).
+
+---
+
+## 10. Sprint 03 Enhancements — Architecture Additions
+
+This section extends the specification above (§1–§9) with the deltas required by
+the Sprint 03 scope (`enhancements/scope.md` items a–s; briefs
+`features/briefs/01-role-based-access.md` through `04-sign-in-page-nav-fix.md`).
+It **supersedes** the Sprint 02 `users` schema (§9.1.1), the `me` payload and the
+superuser gate (§9.2.1), replacing the single `is_superuser` boolean with a
+four-level access model, and adds an admin user-management API, an optional
+Google SSO flow, and a sign-in-page navigation fix. Everything in §1–§9 not
+explicitly superseded or modified here remains in force and is unchanged by this
+pass.
+
+### 10.1 Data Model & Schema Changes
+
+#### 10.1.1 `users` (modified)
+
+| Column | Change |
+|--------|--------|
+| `access_level` | **Added.** TEXT `NOT NULL` with `CHECK (access_level IN ('guest','read-only','user','admin'))`. Model-level default `'guest'`, so a row created without an explicit level (e.g. the fastapi-users SSO auto-provision path) lands at guest. |
+| `is_superuser` | **Removed.** Replaced by `access_level`; `admin` **is** the superuser tier. Every Sprint 01/02 superuser check becomes an admin-level check. |
+
+All other `users` columns (`id`, `email`, `password_hash`, `is_active`,
+`is_verified`, `created_at`) are unchanged.
+
+**Migration `0003_sprint03_roles` (versioned; no dev-DB flush):** adds
+`access_level`, backfills the existing rows, then drops `is_superuser`:
+
+- `is_superuser = 1` → `access_level = 'admin'`
+- `is_superuser = 0` → `access_level = 'user'`
+- the bootstrap admin (`admin@localhost`, `ADMIN_EMAIL`) is forced to `'admin'`
+  regardless (defense in depth).
+- After the backfill, the column keeps its `CHECK` constraint; the app model
+  default is `'guest'` for new rows.
+
+No flush is required this sprint: `oauth_accounts` already exists from Sprint 02
+(scope **s**), and `access_level` is a normal additive migration. `oauth_accounts`
+is consumed as-is (fastapi-users shape; no schema change).
+
+**Bootstrap admin:** created at startup with `access_level = 'admin'` (in addition
+to the existing `is_active`/`is_verified`); the create-if-absent,
+env-password-or-generated behavior of §9.1.1 is unchanged.
+
+#### 10.1.2 Level ordering
+
+The four levels are ordered `guest < read-only < user < admin`. A single module
+(`backend/auth/roles.py`) owns the ordered constants and the
+`require_access(min_level)` dependency so the ordering is defined once and
+enforced consistently (see §10.2.1). No other table changes.
+
+### 10.2 API Contract Changes
+
+Base path and static-file serving are unchanged (§4). The session/session-gating
+rules from §8.2/§9.2 are unchanged, with the additions below.
+
+#### 10.2.1 Role gating (applies to every existing data route)
+
+Every `/api/` route keeps the session gate (`get_current_user`, `401` when
+absent/invalid). On top of it, the data routes now carry a per-route
+minimum-level dependency `require_access(min_level)` that returns
+`403 {"detail": "Insufficient access level"}` when the signed-in account's level
+is below the route's minimum. **Denials are `403`, never `401`**: a `401` would
+throw the SPA back to the login view, but an out-of-level request is an
+authenticated-but-forbidden request.
+
+| Minimum level | Routes |
+|---------------|--------|
+| `read-only` | All **read** routes: `GET /api/companies`, `GET /api/companies/{id}`, `GET /api/industries`, `GET /api/countries`, `GET /api/companies/{company_id}/artifacts`, `GET /api/artifacts/{id}/content`. |
+| `user` | All **mutating** routes: `POST`/`PUT`/`DELETE` for companies, industries, locations, references, news; `POST`/`DELETE` artifacts; `POST`/`DELETE` logo; `POST /api/companies/{id}/documents/generate` (document generation **is a write**). |
+| `admin` | User management (§10.2.3): `GET`/`POST`/`PATCH`/`DELETE /api/auth/users*`. |
+
+- **Guest** (`guest`): authenticated but has **no data access** — every data route
+  (read or write) returns `403`. Guests may call `GET /api/auth/me`,
+  `POST /api/auth/logout`, and `POST /api/auth/change-password`.
+- **Read-only** (`read-only`): reads allowed, all writes refused (`403`), including
+  document generation.
+- **User** (`user`): the full current view/edit access (§8/§9 contracts unchanged).
+- **Admin** (`admin`): user access plus user management.
+
+Existing routes, payloads, and status codes are otherwise unchanged; only the
+gate gains levels. The §9.2 statement that all `/api/` routes require an
+authenticated session remains true.
+
+#### 10.2.2 Authentication endpoints (modified)
+
+##### `GET /api/auth/me`
+
+Payload changes: `is_superuser` is removed and `access_level` is exposed (the SPA
+needs it to render the guest/read-only/admin views):
+
+```json
+{ "id": 1, "email": "admin@localhost", "access_level": "admin" }
+```
+
+- `200` — current session user. `401` — no valid session. Any authenticated level
+  can call it.
+
+##### `POST /api/auth/login` and `POST /api/auth/logout`
+
+Unchanged (§9.2.1). A deactivated account cannot sign in
+(`400 LOGIN_BAD_CREDENTIALS`); a guest can sign in.
+
+##### `POST /api/auth/change-password`
+
+Unchanged (§9.2.1); available to every authenticated level including guest.
+SSO-provisioned accounts hold a generated password the user does not know, so in
+practice they cannot pass `old_password`; no password-set flow is added this
+sprint (§10.7).
+
+##### `POST /api/auth/users` (admin account creation — modified)
+
+Body replaces `is_superuser` with a required `access_level`:
+
+```json
+{ "email": "alice@example.com", "password": "<initial password>", "access_level": "user" }
+```
+
+- `201` — `{ "id": 2, "email": "alice@example.com", "access_level": "user" }`.
+  Created accounts get `is_active = 1`, `is_verified = 1`, and the requested
+  level (any of the four).
+- `400` — duplicate email: `{ "detail": "REGISTER_USER_ALREADY_EXISTS" }`.
+- `422` — missing/invalid email, password, or `access_level`.
+- `401` — no valid session. `403` — authenticated but not admin.
+
+#### 10.2.3 User management (admin — new)
+
+All endpoints are admin-only (`403` for non-admins; the **Users** nav entry is
+likewise admin-only). Guardrails (§10.2.4) are enforced by the API; the UI
+additionally disables the corresponding controls.
+
+##### `GET /api/auth/users`
+
+List all accounts. No search or pagination (brief 02); ordered by `id` ascending.
+
+Response `200` — JSON array:
+
+```json
+[
+  { "id": 1, "email": "admin@localhost", "access_level": "admin", "is_active": true },
+  { "id": 2, "email": "alice@example.com", "access_level": "user", "is_active": true }
+]
+```
+
+Errors: `401` (no session), `403` (not admin).
+
+##### `PATCH /api/auth/users/{user_id}`
+
+Change a level and/or active state. Body — at least one field:
+
+```json
+{ "access_level": "read-only", "is_active": false }
+```
+
+- `200` — the updated user payload (same shape as the list item).
+- `404` — unknown user.
+- `422` — invalid `access_level` value.
+- `400` — a refused safeguard action (see §10.2.4) with a clear detail message;
+  the account is left unchanged.
+- `401` / `403` — as above.
+
+Changing a level takes effect on the target's **next request** (the level is read
+per request); existing sessions are not invalidated by a level change.
+Deactivating a user stops its existing sessions immediately (the session gate
+rejects inactive users), and reactivation restores them.
+
+##### `DELETE /api/auth/users/{user_id}`
+
+- `204` — the account is permanently removed. Deleting cascades to its
+  `access_tokens` and `oauth_accounts` rows (`ON DELETE CASCADE`), so its
+  sessions and any linked Google identity cease to exist. `references.added_by`
+  is an email snapshot (no foreign key) and persists.
+- `404` — unknown user.
+- `400` — a refused safeguard action (see §10.2.4).
+- `401` / `403` — as above.
+
+#### 10.2.4 Guardrails (enforced by the API on every level/active/delete mutation)
+
+1. **Bootstrap admin** (identified by `ADMIN_EMAIL = "admin@localhost"`): can
+   **never** be deactivated, demoted, or deleted, under any circumstance. Any
+   `PATCH`/`DELETE` targeting it is refused with
+   `400 {"detail": "The bootstrap admin cannot be modified"}`.
+2. **Last remaining admin**: cannot be demoted or deleted. "Last" counts accounts
+   with `access_level = 'admin'` (regardless of `is_active`). A demote/delete that
+   would leave zero admin-role accounts is refused with
+   `400 {"detail": "Cannot demote or delete the last remaining admin"}`. Because
+   the bootstrap admin is always an admin and immutable, this rule is a defensive
+   backstop.
+3. **No self role-change**: an admin cannot change **their own** `access_level`
+   (refused with `400 {"detail": "Admins cannot change their own level"}`). Role
+   changes are admin-only and must be performed by another admin.
+   (Self-deactivation is permitted; it immediately ends the actor's own session.)
+4. **Deactivating the last non-bootstrap admin is permitted** — the bootstrap
+   admin remains the active admin. Deactivation is not covered by the last-admin
+   rule (the briefs protect only the bootstrap admin from deactivation).
+
+#### 10.2.5 Google SSO (new — optional)
+
+##### `GET /api/auth/providers` (public, always mounted)
+
+Tells the static SPA whether SSO is available (the SPA cannot read environment
+variables):
+
+Response `200`:
+
+```json
+{ "google": true }
+```
+
+`"google"` is `true` when both `COMPANY_HUB_GOOGLE_CLIENT_ID` and
+`COMPANY_HUB_GOOGLE_CLIENT_SECRET` are present, else `false`. When `false`, the
+sign-in screen shows no Google option and the app is fully self-contained
+(email/password only, scope **l**).
+
+##### `GET /api/auth/authorize` (public — mounted only when SSO is configured)
+
+Starts the Google sign-in flow. Issues a signed state token (signed with the
+state secret, §10.8 item 11) and sets the OAuth CSRF cookie, then returns:
+
+```json
+{ "authorization_url": "https://accounts.google.com/o/oauth2/...&state=..." }
+```
+
+The SPA redirects the browser to `authorization_url`.
+
+##### `GET /api/auth/callback` (public — mounted only when SSO is configured)
+
+The Google redirect target. Custom callback (see §10.6): resolves the account,
+establishes the **same cookie session as email/password** (an `access_tokens` row
++ the HttpOnly `session` cookie, same TTL), then responds with a `302` redirect to
+`/` (the SPA root). On the SPA's next boot, `GET /api/auth/me` sees the session.
+
+Account resolution (fastapi-users `UserManager.oauth_callback` with
+`associate_by_email=True`, `is_verified_by_default=True`):
+
+1. The Google identity is already linked (an `oauth_accounts` row with
+   `oauth_name='google'` and the Google `account_id`) → sign in as that account
+   with its current level and active state.
+2. Otherwise, the Google email matches an existing account → link the Google
+   identity to that account and sign in as it with its existing level and active
+   state.
+3. Otherwise (entirely unknown email) → **auto-provision a new guest account**:
+   `email` = Google email, `access_level = 'guest'` (the model default),
+   `is_active = 1`, `is_verified = 1`, and a generated password (fastapi-users
+   generates and hashes one); link the identity; sign in as that guest.
+
+Errors / failures:
+
+- Invalid or expired state token, or missing/mismatched CSRF cookie → `400`.
+- Resolved account is inactive → `400 {"detail": "LOGIN_BAD_CREDENTIALS"}`.
+- Canceled/failed Google sign-in → `400`; no session is established and the SPA
+  returns the user to the login view with feedback.
+
+**Dev vs production cookies:** the session cookie and the OAuth CSRF cookie are
+`Secure` only when `COMPANY_HUB_SECURE_COOKIES=1` is set (production); the default
+(`off`) keeps them non-Secure so the SSO flow works over plain HTTP on localhost
+(Brief 03 item 7). The CSRF cookie honors the 1-hour state-token lifetime.
+
+Redirect URI to register in the Google OAuth console:
+`http://127.0.0.1:8000/api/auth/callback` (unchanged from Stage 4 — the custom
+callback keeps the same URL path, so the Stage 4 console registration stands;
+§10.8 item 10).
+
+### 10.3 Project / File Structure Additions
+
+New/changed files beyond the §1, §8.3, and §9.3 trees:
+
+```
+backend/
+├── auth/
+│   ├── roles.py               # level constants/ordering + require_access / get_current_admin (new)
+│   ├── providers.py           # GET /api/auth/providers + optional GoogleOAuth2 client (new)
+│   ├── oauth.py               # custom SSO authorize/callback router (new)
+│   ├── routers.py             # extended: /users GET/PATCH/DELETE, me payload (extended)
+│   └── schemas.py             # UserRead/UserCreate gain access_level; level/active payloads (extended)
+├── models/user.py             # add access_level, drop is_superuser (modified)
+├── alembic/versions/0003_sprint03_roles.py   # migration: access_level + drop is_superuser (new)
+└── app.py                     # mount providers always; mount oauth router when configured (extended)
+frontend/
+├── index.html                 # whole top <nav> hidden when unauthenticated (extended)
+└── js/
+    ├── app.js                 # hide/show whole nav; guest blocked view; Users nav entry (extended)
+    ├── login.js               # "Sign in with Google" button when providers.google (extended)
+    ├── users.js               # admin user-management view (new)
+    ├── api.js                 # providers, users CRUD, me.access_level (extended)
+    └── list.js / profile.js / form.js / industries.js   # hide mutating controls for read-only (extended)
+```
+
+### 10.4 Module Boundary Changes
+
+| Module | Change |
+|--------|--------|
+| `backend/auth/roles.py` | Owns the level constants, ordering, and the `require_access(min_level)` / `get_current_admin` dependencies. No business data. |
+| `backend/auth/providers.py` | Owns the public providers endpoint and the (optional) Google OAuth client construction. |
+| `backend/auth/oauth.py` | Owns the SSO authorize/callback routes incl. the custom session-cookie + redirect callback. |
+| `backend/auth/routers.py` | Owns the auth router incl. the user-management CRUD (GET/PATCH/DELETE `/users`) and the guardrails; extends the `me` payload and `POST /api/auth/users`. |
+| `backend/routers/*` | Existing contracts unchanged; each route gains its per-route role dependency (`require_access`). Routers still do no raw SQL and no file-bytes handling. |
+| `backend/models/user.py` | `access_level` replaces `is_superuser`. |
+| `backend/db/seed.py` | Unchanged content/rules; the bootstrap admin is created with `access_level = 'admin'`. |
+| `frontend/*` | Session-based nav hiding, guest blocked view, read-only UI gating, admin Users view, and the SSO sign-in button. |
+
+Ownership rules from §2 (routers do no raw SQL/file-bytes handling; storage owns
+bytes; schemas own the contract) are unchanged.
+
+### 10.5 Backend / Frontend Responsibility Changes
+
+**Backend (new):** add `access_level` to `users` (migration 0003) and drop
+`is_superuser`; expose `access_level` in the `me` and user-management payloads;
+apply the per-route `require_access` gates (§10.2.1); implement the admin
+user-management API with guardrails (§10.2.3–10.2.4); implement the optional
+Google SSO flow (providers endpoint, authorize/callback, session-cookie +
+redirect) driven by environment variables with the secure-cookie toggle.
+`POST /api/auth/users` takes `access_level` instead of `is_superuser`. Non-auth
+data behavior is unchanged.
+
+**Frontend (new):** hide the **entire** top navigation bar (brand, menu links,
+toggler — the whole `<nav>`) when there is no authenticated session, and show it
+fully once a session exists (Brief 04). Render the **guest blocked view** for
+`access_level === 'guest'`: nav visible, empty/blocked main view with an
+explanatory message, with logout and change-password available and no data shown.
+Hide every mutating control (create/edit/delete/upload/logo/document-generation)
+for read-only, and treat a `403` from any API call as "action not permitted"
+feedback (never as logout; only `401` returns to the login view). For admins,
+show a **Users** nav entry leading to the user-management view (list, create,
+change level, activate/deactivate, delete) and disable
+bootstrap-admin/last-admin-destabilizing controls in the UI (the API remains
+authoritative). On the login view, when `GET /api/auth/providers` returns
+`google: true`, show a **Sign in with Google** button that navigates to
+`/api/auth/authorize`; after the callback redirects to `/`, the boot `me()` call
+sees the session. The SPA remains a pure API client with no authoritative
+client-side state.
+
+### 10.6 Component Interactions & State Flow
+
+```
+Browser (SPA)
+   │  boot → GET /api/auth/me → { access_level }
+   │    401 ────────────────► login view (+ GET /api/auth/providers → show/hide Google button)
+   │    guest ─────────────► nav visible + blocked main view (logout + change-password only)
+   │    read-only/user/admin ► main views; mutating controls hidden below user; Users view for admin
+   │  any /api call → 401 ─► return to login view
+   │                 → 403 ─► "not permitted" feedback (session kept)
+   │  Sign in with Google → /api/auth/authorize → Google → /api/auth/callback → 302 → /
+   ▼
+FastAPI
+   ├─ require_access(read-only | user | admin) dependencies over the data routers
+   ├─ fastapi-users auth backend (DatabaseStrategy + CookieTransport)
+   │     session cookie → access_tokens → users (else 401)
+   │     login/logout/me/change-password as before (any level)
+   │     users CRUD (GET/POST/PATCH/DELETE /api/auth/users) gated to admin + guardrails
+   ├─ Google OAuth (optional, env-driven)
+   │     GET /api/auth/providers          → { google: bool }
+   │     GET /api/auth/authorize          → state token + CSRF cookie → Google
+   │     GET /api/auth/callback           → UserManager.oauth_callback (link → associate-by-email
+   │                                        → auto-provision guest) → access_tokens row
+   │                                        → session cookie → 302 → /
+   ├─ routers (companies / industries / reference / locations / references / news
+   │            / artifacts(+logo) / documents) ── async SQLAlchemy session
+   ├─ services/pdf.py (fpdf2) ──► bytes (+ logo bytes when set) → storage
+   ├─ services/storage.py ──► data/artifacts/<company_id>/...
+   └─ db/engine.py (SQLAlchemy async + aiosqlite) ──► data/company_hub.db
+      (schema applied via Alembic migrations; 0003 = roles)
+```
+
+**State flow additions:** a guest session renders the blocked view and issues no
+data fetches. A role change is read per request, so it takes effect on the
+target's next request without session invalidation. Deactivating a user
+immediately stops its existing sessions (the session gate rejects inactive
+users); reactivation restores them. Deleting a user cascades to its tokens and
+OAuth links. For SSO, the first sign-in with an unknown email auto-provisions a
+guest who stays on the blocked view until an admin elevates them; elevation takes
+effect on their next fetch. The SSO callback establishes the same cookie session
+as email/password, so route gating, TTL, and logout behave identically for both
+sign-in paths.
+
+### 10.7 Explicitly Unchanged / Out of Scope
+
+- All non-auth data contracts are unchanged: companies, industries, countries,
+  locations, references, news, artifacts (incl. logos), document generation,
+  completeness rule, and seed content/rules keep their exact §8/§9 shapes and
+  status codes; only the auth gate gains levels.
+- Email/password login, logout, `change-password`, cookie-session semantics
+  (7-day default TTL, `COMPANY_HUB_SESSION_TTL`), and session route-gating are
+  unchanged. `401` still means "no/invalid session".
+- `oauth_accounts` is consumed as-is (no schema change, scope **s**).
+- No self-service signup or self-service profile editing; account creation and
+  role changes remain admin-only. No password-set flow for SSO-provisioned
+  accounts this sprint (approved).
+- Google is the only external provider. SSO is config-driven and optional;
+  without credentials the app is fully self-contained. SSO is verified manually
+  against real Google credentials (no automated SSO checks, scope **o**).
+- No DB flush: `oauth_accounts` exists from Sprint 02; `access_level` lands via
+  versioned migration 0003.
+- The sign-in nav fix changes only when the bar is hidden; the signed-in
+  navigation is identical to today.
+- In-scope, deliberate changes (not regressions): the `me`/user-management
+  payloads and the user schema (role replaces `is_superuser`), and the role
+  gating on existing data routes.
+
+### 10.8 Open Design Decisions / Contract Notes (Sprint 03)
+
+1. **Level values** are stored as TEXT (`guest`, `read-only`, `user`, `admin`)
+   with a `CHECK` constraint and a single ordering helper in
+   `backend/auth/roles.py`; order is `guest < read-only < user < admin`.
+2. **`is_superuser` is dropped**; `admin` is the superuser tier. Every Sprint
+   01/02 superuser gate site moves to the admin level.
+3. **Denials are `403`** (session preserved); `401` remains session-only. A
+   read-only user attempting a write, or a guest attempting any data call, gets
+   `403`.
+4. **Guests are authenticated but have no data access** (all data endpoints
+   `403`); they may use `me`, `logout`, and `change-password`.
+5. **Document generation is a write** and is denied for read-only.
+6. **Bootstrap admin** is identified by `ADMIN_EMAIL` (`admin@localhost`) and is
+   immutable for level/active/delete.
+7. **Last-admin rule** counts admin-role accounts (active or not); because the
+   bootstrap admin is always an admin, it is a defensive backstop. Deactivation
+   of the last non-bootstrap admin is permitted.
+8. **Admins cannot change their own level**; self-deactivation is permitted but
+   ends the actor's session immediately.
+9. **SSO is mounted only when both Google env vars are present**;
+   `GET /api/auth/providers` drives the login button.
+10. **Custom SSO callback** (approved): reuses `UserManager.oauth_callback` + the
+    same `DatabaseStrategy`/`CookieTransport`, sets the session cookie, and
+    `302`-redirects to `/`. This deviates from the Stage 4 assumption that the
+    stock `get_oauth_router` callback response would be used, but keeps the same
+    `/api/auth/callback` path, so the Stage 4 Google-console redirect
+    registration stands.
+11. **`COMPANY_HUB_OAUTH_STATE_SECRET`** signs the OAuth state token; when absent
+    it is derived from the Google client secret.
+12. **`COMPANY_HUB_SECURE_COOKIES=1`** (production) makes the session + OAuth
+    CSRF cookies `Secure`; default off = the dev plain-HTTP relaxation (Brief 03
+    item 7).
+13. **Auto-provisioned SSO accounts** are guest/active/verified with a generated
+    password; they cannot use `change-password` (they don't know the generated
+    password) and no password-set flow exists this sprint.
+14. **User-management list** is ordered by `id` ascending; no search or
+    pagination (brief 02).
